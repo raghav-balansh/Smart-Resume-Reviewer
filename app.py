@@ -1,4 +1,4 @@
-import streamlit as st
+import gradio as gr
 import pdfplumber
 from io import BytesIO
 import json
@@ -10,7 +10,6 @@ from typing import Dict, List, Tuple, Optional
 import hashlib
 import tempfile
 
-# Import our custom modules
 from hf_analyzer import HuggingFaceAnalyzer
 from resume_processor import ResumeProcessor
 from pdf_generator import ResumePDFGenerator
@@ -23,40 +22,30 @@ class Config:
     SUPPORTED_FORMATS = ['.pdf', '.txt']
     HUGGINGFACE_MODEL = "context-labs/meta-llama-Llama-3.2-3B-Instruct-FP16"
 
+# Global variables to store analyzer instances
+hf_analyzer = None
+resume_processor = None
+pdf_generator = None
+feedback_generator = None
+analysis_history = []
 
-# Initialize session state
-def init_session_state():
-    """Initialize Streamlit session state variables"""
-    if 'resume_text' not in st.session_state:
-        st.session_state.resume_text = ""
-    if 'comprehensive_feedback' not in st.session_state:
-        st.session_state.comprehensive_feedback = None
-    if 'optimized_resume' not in st.session_state:
-        st.session_state.optimized_resume = None
-    if 'analysis_history' not in st.session_state:
-        st.session_state.analysis_history = []
-    if 'hf_analyzer' not in st.session_state:
-        st.session_state.hf_analyzer = None
-    if 'resume_processor' not in st.session_state:
-        st.session_state.resume_processor = None
-    if 'pdf_generator' not in st.session_state:
-        st.session_state.pdf_generator = None
-    if 'feedback_generator' not in st.session_state:
-        st.session_state.feedback_generator = None
-
-# Initialize modules
 def initialize_modules():
     """Initialize all required modules"""
-    if st.session_state.hf_analyzer is None:
-        st.session_state.hf_analyzer = HuggingFaceAnalyzer()
-    if st.session_state.resume_processor is None:
-        st.session_state.resume_processor = ResumeProcessor()
-    if st.session_state.pdf_generator is None:
-        st.session_state.pdf_generator = ResumePDFGenerator()
-    if st.session_state.feedback_generator is None:
-        st.session_state.feedback_generator = SectionWiseFeedbackGenerator(st.session_state.hf_analyzer)
+    global hf_analyzer, resume_processor, pdf_generator, feedback_generator
+    
+    try:
+        if hf_analyzer is None:
+            hf_analyzer = HuggingFaceAnalyzer()
+        if resume_processor is None:
+            resume_processor = ResumeProcessor()
+        if pdf_generator is None:
+            pdf_generator = ResumePDFGenerator()
+        if feedback_generator is None:
+            feedback_generator = SectionWiseFeedbackGenerator(hf_analyzer)
+        return "✅ AI modules initialized successfully!"
+    except Exception as e:
+        return f"❌ Error initializing modules: {str(e)}"
 
-# PDF Processing Helper
 def extract_text_from_pdf(pdf_file) -> str:
     """Extract text from PDF file"""
     try:
@@ -70,340 +59,353 @@ def extract_text_from_pdf(pdf_file) -> str:
     except Exception as e:
         raise Exception(f"Error extracting PDF: {str(e)}")
 
-# Main Streamlit Application
-def main():
-    st.set_page_config(
-        page_title="AI Resume Optimizer with Hugging Face",
-        page_icon="🤖",
-        layout="wide",
-        initial_sidebar_state="expanded"
-    )
+def analyze_resume(uploaded_file, pasted_text, job_role, custom_role, job_description):
+    """Main function to analyze resume using AI"""
+    global feedback_generator, hf_analyzer, analysis_history
     
-    # Custom CSS
-    st.markdown("""
-    <style>
-    .main {
-        padding: 2rem;
-    }
-    .stButton > button {
-        width: 100%;
-        background-color: #2E4057;
-        color: white;
-    }
-    .success-box {
-        padding: 1rem;
-        border-radius: 0.5rem;
-        background-color: #d4edda;
-        border: 1px solid #c3e6cb;
-        color: #155724;
-    }
-    .warning-box {
-        padding: 1rem;
-        border-radius: 0.5rem;
-        background-color: #fff3cd;
-        border: 1px solid #ffeeba;
-        color: #856404;
-    }
-    .metric-card {
-        background-color: #f8f9fa;
-        padding: 1rem;
-        border-radius: 0.5rem;
-        text-align: center;
-    }
-    .section-feedback {
-        background-color: #f8f9fa;
-        padding: 1rem;
-        border-radius: 0.5rem;
-        margin: 0.5rem 0;
-        border-left: 4px solid #048A81;
-    }
-    </style>
-    """, unsafe_allow_html=True)
+    # Initialize modules if not done
+    init_status = initialize_modules()
+    if "Error" in init_status:
+        return init_status, "", "", "", "", "", ""
     
-    init_session_state()
-    initialize_modules()
+    # Determine job role
+    if job_role == "Custom" and custom_role:
+        target_role = custom_role
+    elif job_role != "Custom":
+        target_role = job_role
+    else:
+        target_role = "General"
     
-    # Header
-    st.title("🤖 AI Resume Optimizer with Hugging Face")
-    st.markdown("### Powered by Meta Llama 3.2 - Get professional resume feedback and optimization!")
-    
-    # Sidebar Configuration
-    with st.sidebar:
-        st.header("⚙️ Configuration")
-        
-        # Model Information
-        st.subheader("🤖 AI Model")
-        st.info(f"Using: {Config.HUGGINGFACE_MODEL}")
-        st.caption("This model provides comprehensive resume analysis and optimization")
-        
-        st.divider()
-        
-        # Job Configuration
-        st.subheader("Job Details")
-        job_roles = ["Data Scientist", "Software Engineer", "Product Manager", 
-                    "Marketing Manager", "Business Analyst", "Project Manager", 
-                    "DevOps Engineer", "UI/UX Designer", "Cybersecurity Analyst", "Custom"]
-        
-        selected_role = st.selectbox("Select Job Role:", job_roles)
-        
-        if selected_role == "Custom":
-            custom_role = st.text_input("Enter Custom Role:")
-            job_role = custom_role if custom_role else "General"
+    # Get resume text
+    resume_text = ""
+    try:
+        if uploaded_file is not None:
+            if uploaded_file.name.endswith('.pdf'):
+                resume_text = extract_text_from_pdf(uploaded_file.name)
+            else:
+                with open(uploaded_file.name, 'r', encoding='utf-8') as f:
+                    resume_text = f.read()
+        elif pasted_text.strip():
+            resume_text = pasted_text
         else:
-            job_role = selected_role
+            return "⚠️ Please upload a resume file or paste resume text!", "", "", "", "", "", ""
         
-        # Optional Job Description
-        with st.expander("Add Job Description (Optional)"):
-            job_description = st.text_area("Paste the job description here:", height=200)
+        if not resume_text:
+            return "❌ Could not extract text from the resume!", "", "", "", "", "", ""
         
-        st.divider()
-        
-        # Analysis History
-        if st.session_state.analysis_history:
-            st.subheader("📊 Analysis History")
-            for idx, history in enumerate(st.session_state.analysis_history[-3:], 1):
-                st.info(f"{idx}. {history['role']} - Score: {history['score']:.1f}%")
+    except Exception as e:
+        return f"❌ Error processing resume: {str(e)}", "", "", "", "", "", ""
     
-    # Main Content Area
-    col1, col2 = st.columns([1, 1])
-    
-    with col1:
-        st.header("📤 Upload Resume")
-        
-        # File Upload
-        uploaded_file = st.file_uploader(
-            "Choose a PDF or TXT file",
-            type=['pdf', 'txt'],
-            help="Upload your resume in PDF or TXT format (max 5MB)"
+    try:
+        # Generate comprehensive feedback
+        comprehensive_feedback = feedback_generator.generate_comprehensive_feedback(
+            resume_text, target_role, job_description
         )
         
-        # Text Input Alternative
-        with st.expander("Or paste your resume text"):
-            pasted_text = st.text_area("Paste resume text here:", height=300)
+        # Generate optimized version
+        try:
+            optimized_resume = hf_analyzer.optimize_resume(resume_text, target_role)
+        except Exception as e:
+            print(f"Warning: Could not generate optimized version: {e}")
+            optimized_resume = resume_text
         
-        # Process Resume
-        if st.button("🤖 Analyze Resume with AI", type="primary"):
-            # Get resume text
-            resume_text = ""
-            
-            if uploaded_file:
-                if uploaded_file.type == "application/pdf":
-                    resume_text = extract_text_from_pdf(uploaded_file)
-                else:
-                    resume_text = str(uploaded_file.read(), "utf-8")
-            elif pasted_text:
-                resume_text = pasted_text
-            else:
-                st.warning("Please upload a resume or paste text!")
-                return
-            
-            if not resume_text:
-                st.error("Could not extract text from the resume!")
-                return
-            
-            # Store in session state
-            st.session_state.resume_text = resume_text
-            
-            # Generate Comprehensive Feedback
-            with st.spinner("🤖 AI is analyzing your resume..."):
-                try:
-                    comprehensive_feedback = st.session_state.feedback_generator.generate_comprehensive_feedback(
-                        resume_text, job_role, job_description
-                    )
-                    st.session_state.comprehensive_feedback = comprehensive_feedback
-                except Exception as e:
-                    st.error(f"Error during analysis: {str(e)}")
-                    return
-            
-            # Generate Optimized Version
-            with st.spinner("✨ Creating optimized resume..."):
-                try:
-                    optimized = st.session_state.hf_analyzer.optimize_resume(resume_text, job_role)
-                    st.session_state.optimized_resume = optimized
-                except Exception as e:
-                    st.warning(f"Could not generate optimized version: {str(e)}")
-                    st.session_state.optimized_resume = resume_text
-            
-            # Add to history
-            st.session_state.analysis_history.append({
-                'role': job_role,
-                'score': comprehensive_feedback.ats_analysis.total_score,
-                'timestamp': datetime.now().strftime("%Y-%m-%d %H:%M")
-            })
-            
-            st.success("✅ AI Analysis Complete!")
+        # Add to history
+        analysis_history.append({
+            'role': target_role,
+            'score': comprehensive_feedback.ats_analysis.total_score,
+            'timestamp': datetime.now().strftime("%Y-%m-%d %H:%M")
+        })
+        
+        # Format results for display
+        score = comprehensive_feedback.ats_analysis.total_score
+        
+        # Overall assessment
+        if score >= 80:
+            score_emoji = "🟢"
+            score_message = "Excellent ATS compatibility!"
+        elif score >= 60:
+            score_emoji = "🟡"
+            score_message = "Good, but room for improvement"
+        else:
+            score_emoji = "🔴"
+            score_message = "Needs significant optimization"
+        
+        overall_result = f"{score_emoji} **Overall ATS Score: {score:.1f}/100**\n{score_message}"
+        
+        # Component scores
+        scores = comprehensive_feedback.ats_analysis.component_scores
+        component_scores = f"""
+**Detailed Breakdown:**
+• Keyword Match: {scores['keyword_match']:.0f}%
+• Formatting: {scores['formatting']:.0f}%
+• Sections: {scores['section_completeness']:.0f}%
+• Readability: {scores['readability']:.0f}%
+• Length: {scores['length_appropriateness']:.0f}%
+"""
+        
+        # Strengths and weaknesses
+        strengths_text = ""
+        if comprehensive_feedback.overall_feedback.strengths:
+            strengths_text = "**Strengths:**\n" + "\n".join([f"• {s}" for s in comprehensive_feedback.overall_feedback.strengths])
+        
+        weaknesses_text = ""
+        if comprehensive_feedback.overall_feedback.weaknesses:
+            weaknesses_text = "**Areas for Improvement:**\n" + "\n".join([f"• {w}" for w in comprehensive_feedback.overall_feedback.weaknesses])
+        
+        # Recommendations
+        recommendations_text = ""
+        if comprehensive_feedback.overall_feedback.recommendations:
+            recommendations_text = "**Recommendations:**\n" + "\n".join([f"• {r}" for r in comprehensive_feedback.overall_feedback.recommendations])
+        
+        # Section-wise analysis
+        section_analysis = "**Section-wise Analysis:**\n\n"
+        for section in comprehensive_feedback.section_analyses:
+            section_analysis += f"**{section.section_name.title()} (Score: {section.score:.0f}/100)**\n"
+            section_analysis += f"Feedback: {section.feedback}\n"
+            if section.suggestions:
+                section_analysis += "Suggestions:\n" + "\n".join([f"• {s}" for s in section.suggestions]) + "\n"
+            section_analysis += "\n"
+        
+        # Missing keywords
+        missing_keywords = ""
+        if comprehensive_feedback.ats_analysis.missing_keywords:
+            missing_keywords = f"**Missing Keywords:** {', '.join(comprehensive_feedback.ats_analysis.missing_keywords[:10])}"
+        
+        return (
+            "✅ AI Analysis Complete!",
+            overall_result,
+            component_scores,
+            strengths_text,
+            weaknesses_text,
+            recommendations_text,
+            section_analysis,
+            optimized_resume,
+            missing_keywords
+        )
+        
+    except Exception as e:
+        return f"❌ Error during AI analysis: {str(e)}", "", "", "", "", "", "", "", ""
+
+def generate_pdf_download(optimized_text, job_role):
+    """Generate PDF for download"""
+    global pdf_generator
     
-    with col2:
-        st.header("📊 AI Analysis Results")
-        
-        if st.session_state.comprehensive_feedback:
-            feedback = st.session_state.comprehensive_feedback
-            
-            # Overall Score Display
-            score = feedback.ats_analysis.total_score
-            
-            # Score color coding
-            if score >= 80:
-                score_color = "🟢"
-                score_message = "Excellent ATS compatibility!"
-            elif score >= 60:
-                score_color = "🟡"
-                score_message = "Good, but room for improvement"
-            else:
-                score_color = "🔴"
-                score_message = "Needs significant optimization"
-            
-            # Display main score
-            st.markdown(f"### {score_color} Overall ATS Score: {score:.1f}/100")
-            st.caption(score_message)
-            
-            # Progress bar
-            st.progress(score / 100)
-            
-            # Component Scores
-            st.subheader("📈 Detailed Breakdown")
-            
-            scores = feedback.ats_analysis.component_scores
-            
-            col_a, col_b = st.columns(2)
-            with col_a:
-                st.metric("Keyword Match", f"{scores['keyword_match']:.0f}%")
-                st.metric("Formatting", f"{scores['formatting']:.0f}%")
-                st.metric("Readability", f"{scores['readability']:.0f}%")
-            
-            with col_b:
-                st.metric("Sections", f"{scores['section_completeness']:.0f}%")
-                st.metric("Length", f"{scores['length_appropriateness']:.0f}%")
-            
-            # Estimated Improvement
-            if feedback.estimated_improvement > score:
-                improvement = feedback.estimated_improvement - score
-                st.success(f"📈 Estimated improvement potential: +{improvement:.1f} points")
-            
-            # Missing Keywords
-            if feedback.ats_analysis.missing_keywords:
-                st.subheader("🔑 Missing Keywords")
-                missing = feedback.ats_analysis.missing_keywords
-                st.warning(f"Add these keywords: {', '.join(missing[:5])}")
-            
-            # Priority Improvements
-            if feedback.priority_improvements:
-                st.subheader("Priority Improvements")
-                for i, improvement in enumerate(feedback.priority_improvements[:3], 1):
-                    st.info(f"{i}. {improvement}")
+    if not optimized_text:
+        return None
     
-    # Comprehensive Feedback Section
-    if st.session_state.comprehensive_feedback:
-        st.divider()
-        st.header("💡 AI-Powered Feedback & Recommendations")
+    try:
+        # Create temporary PDF file
+        temp_pdf_path = f"temp_resume_{datetime.now().strftime('%Y%m%d_%H%M%S')}.pdf"
+        pdf_generator.generate_enhanced_pdf(optimized_text, temp_pdf_path)
         
-        feedback = st.session_state.comprehensive_feedback
+        if os.path.exists(temp_pdf_path):
+            return temp_pdf_path
+        else:
+            return None
+    except Exception as e:
+        print(f"Error generating PDF: {e}")
+        return None
+
+def get_analysis_history():
+    """Get formatted analysis history"""
+    if not analysis_history:
+        return "No analysis history yet."
+    
+    history_text = "**Recent Analysis History:**\n\n"
+    for i, entry in enumerate(analysis_history[-5:], 1):  # Show last 5 entries
+        history_text += f"{i}. **{entry['role']}** - Score: {entry['score']:.1f}% ({entry['timestamp']})\n"
+    
+    return history_text
+
+# Create Gradio interface
+def create_interface():
+    """Create the Gradio interface"""
+    
+    with gr.Blocks(
+        title="AI Resume Optimizer with Hugging Face",
+        theme=gr.themes.Soft(),
+        css="""
+        .gradio-container {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+        }
+        .main-header {
+            text-align: center;
+            color: #2E4057;
+            margin-bottom: 2rem;
+        }
+        """
+    ) as demo:
         
-        tab1, tab2, tab3, tab4 = st.tabs(["Overall Feedback", "Section Analysis", "Optimized Resume", "Download"])
-        
-        with tab1:
-            st.subheader("AI Overall Assessment")
+        gr.Markdown(
+            """
+            # 🤖 AI Resume Optimizer with Hugging Face
+            ### Powered by Meta Llama 3.2 - Get professional resume feedback and optimization!
             
-            # Overall feedback from HF model
-            if feedback.overall_feedback.strengths:
-                st.subheader("Strengths")
-                for strength in feedback.overall_feedback.strengths:
-                    st.success(f"• {strength}")
-            
-            if feedback.overall_feedback.weaknesses:
-                st.subheader("Areas for Improvement")
-                for weakness in feedback.overall_feedback.weaknesses:
-                    st.warning(f"• {weakness}")
-            
-            if feedback.overall_feedback.recommendations:
-                st.subheader("Recommendations")
-                for rec in feedback.overall_feedback.recommendations:
-                    st.info(f"• {rec}")
+            Upload your resume and get comprehensive AI-powered analysis, ATS scoring, and optimization suggestions.
+            """,
+            elem_classes=["main-header"]
+        )
         
-        with tab2:
-            st.subheader("📋 Section-wise Analysis")
-            
-            for section in feedback.section_analyses:
-                with st.expander(f"{section.section_name.title()} Section (Score: {section.score:.0f}/100)"):
-                    st.write(f"**Feedback:** {section.feedback}")
-                    
-                    if section.suggestions:
-                        st.write("**Suggestions:**")
-                        for suggestion in section.suggestions:
-                            st.write(f"• {suggestion}")
-                    
-                    if section.missing_keywords:
-                        st.write("**Missing Keywords:**")
-                        st.write(", ".join(section.missing_keywords[:5]))
-        
-        with tab3:
-            if st.session_state.optimized_resume:
-                st.subheader("✨ AI-Optimized Resume")
-                st.text_area("Enhanced Resume Content:", 
-                           value=st.session_state.optimized_resume,
-                           height=500)
+        with gr.Row():
+            with gr.Column(scale=1):
+                gr.Markdown("## 📤 Upload Resume")
                 
-                # Show improvement
-                if feedback.estimated_improvement > feedback.ats_analysis.total_score:
-                    improvement = feedback.estimated_improvement - feedback.ats_analysis.total_score
-                    st.success(f"Estimated score improvement: {feedback.ats_analysis.total_score:.0f}% → {feedback.estimated_improvement:.0f}% (+{improvement:.1f} points)")
-        
-        with tab4:
-            st.subheader("Download Professional Resume")
+                # File upload
+                resume_file = gr.File(
+                    label="Upload Resume (PDF or TXT)",
+                    file_types=[".pdf", ".txt"],
+                    file_count="single"
+                )
+                
+                # Text input alternative
+                resume_text = gr.Textbox(
+                    label="Or paste your resume text here:",
+                    placeholder="Paste your resume content...",
+                    lines=10,
+                    max_lines=15
+                )
+                
+                gr.Markdown("## ⚙️ Configuration")
+                
+                # Job role selection
+                job_role = gr.Dropdown(
+                    choices=["Data Scientist", "Software Engineer", "Product Manager", 
+                            "Marketing Manager", "Business Analyst", "Project Manager", 
+                            "DevOps Engineer", "UI/UX Designer", "Cybersecurity Analyst", "Custom"],
+                    value="Data Scientist",
+                    label="Select Job Role"
+                )
+                
+                custom_role = gr.Textbox(
+                    label="Custom Role (if selected above)",
+                    placeholder="Enter custom job role...",
+                    visible=False
+                )
+                
+                # Show custom role input when Custom is selected
+                job_role.change(
+                    lambda x: gr.update(visible=x=="Custom"),
+                    inputs=[job_role],
+                    outputs=[custom_role]
+                )
+                
+                # Job description
+                job_description = gr.Textbox(
+                    label="Job Description (Optional)",
+                    placeholder="Paste the job description here for better optimization...",
+                    lines=5
+                )
+                
+                # Analyze button
+                analyze_btn = gr.Button(
+                    "🤖 Analyze Resume with AI",
+                    variant="primary",
+                    size="lg"
+                )
             
-            if st.session_state.optimized_resume:
-                try:
-                    # Generate enhanced PDF
-                    pdf_buffer = BytesIO()
-                    temp_pdf_path = "temp_optimized_resume.pdf"
-                    st.session_state.pdf_generator.generate_enhanced_pdf(
-                        st.session_state.optimized_resume, temp_pdf_path
-                    )
+            with gr.Column(scale=1):
+                gr.Markdown("## 📊 AI Analysis Results")
+                
+                # Status message
+                status_msg = gr.Markdown("")
+                
+                # Overall score
+                overall_score = gr.Markdown("")
+                
+                # Component scores
+                component_scores = gr.Markdown("")
+                
+                # Missing keywords
+                missing_keywords = gr.Markdown("")
+        
+        # Results section
+        with gr.Row():
+            with gr.Column():
+                gr.Markdown("## 💡 AI-Powered Feedback & Recommendations")
+                
+                with gr.Tabs():
+                    with gr.TabItem("Overall Feedback"):
+                        strengths_output = gr.Markdown("")
+                        weaknesses_output = gr.Markdown("")
+                        recommendations_output = gr.Markdown("")
                     
-                    with open(temp_pdf_path, 'rb') as f:
-                        pdf_data = f.read()
+                    with gr.TabItem("Section Analysis"):
+                        section_analysis_output = gr.Markdown("")
                     
-                    col1, col2 = st.columns(2)
-                    
-                    with col1:
-                        st.download_button(
-                            label="Download Enhanced PDF",
-                            data=pdf_data,
-                            file_name=f"enhanced_resume_{job_role.lower().replace(' ', '_')}.pdf",
-                            mime="application/pdf"
+                    with gr.TabItem("Optimized Resume"):
+                        optimized_resume_output = gr.Textbox(
+                            label="AI-Optimized Resume Content",
+                            lines=20,
+                            max_lines=25,
+                            show_copy_button=True
                         )
+                        
+                        # Download buttons
+                        with gr.Row():
+                            download_pdf_btn = gr.Button("📄 Generate PDF Download", variant="secondary")
+                            download_txt_btn = gr.DownloadButton("📝 Download as TXT", variant="secondary")
                     
-                    with col2:
-                        st.download_button(
-                            label="Download as TXT",
-                            data=st.session_state.optimized_resume,
-                            file_name=f"optimized_resume_{job_role.lower().replace(' ', '_')}.txt",
-                            mime="text/plain"
-                        )
-                    
-                    # Clean up temp file
-                    if os.path.exists(temp_pdf_path):
-                        os.remove(temp_pdf_path)
-                    
-                    st.info("Tip: The enhanced PDF uses professional formatting and is ATS-optimized!")
-                    
-                except Exception as e:
-                    st.error(f"Error generating PDF: {str(e)}")
-                    # Fallback to text download
-                    st.download_button(
-                        label="Download as TXT",
-                        data=st.session_state.optimized_resume,
-                        file_name=f"optimized_resume_{job_role.lower().replace(' ', '_')}.txt",
-                        mime="text/plain"
-                    )
+                    with gr.TabItem("Analysis History"):
+                        history_output = gr.Markdown("")
+                        refresh_history_btn = gr.Button("🔄 Refresh History")
+        
+        # Event handlers
+        analyze_btn.click(
+            fn=analyze_resume,
+            inputs=[resume_file, resume_text, job_role, custom_role, job_description],
+            outputs=[
+                status_msg, overall_score, component_scores, 
+                strengths_output, weaknesses_output, recommendations_output,
+                section_analysis_output, optimized_resume_output, missing_keywords
+            ]
+        )
+        
+        # Update download button with optimized text
+        optimized_resume_output.change(
+            lambda text: gr.update(value=text, filename="optimized_resume.txt") if text else gr.update(),
+            inputs=[optimized_resume_output],
+            outputs=[download_txt_btn]
+        )
+        
+        # Refresh history
+        refresh_history_btn.click(
+            fn=get_analysis_history,
+            outputs=[history_output]
+        )
+        
+        # Footer
+        gr.Markdown(
+            """
+            ---
+            <div style='text-align: center; color: #666; padding: 1rem;'>
+                <p>🔒 Your data is processed securely and not stored permanently</p>
+                <p>Built with ❤️ using Gradio and Hugging Face Transformers</p>
+            </div>
+            """)
     
-    # Footer
-    st.divider()
-    st.markdown("""
-    <div style='text-align: center; color: #666; padding: 2rem;'>
-        <p>Your data is processed securely and not stored</p>
-    </div>
-    """, unsafe_allow_html=True)
+    return demo
+
+# Main execution
+def main():
+    """Main function to run the Gradio app"""
+    print("🚀 Starting AI Resume Optimizer with Gradio...")
+    print(f"📊 Using model: {Config.HUGGINGFACE_MODEL}")
+    
+    # Initialize modules
+    init_status = initialize_modules()
+    print(init_status)
+    
+    # Create and launch interface
+    demo = create_interface()
+    
+    # Launch the app
+    demo.launch(
+        server_name="0.0.0.0",  # Allow external access
+        server_port=7860,       # Default Gradio port
+        share=True,             # Create public link
+        show_error=True,        # Show errors in interface
+        debug=True              # Enable debug mode
+    )
 
 if __name__ == "__main__":
     main()
