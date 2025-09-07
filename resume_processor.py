@@ -1,564 +1,507 @@
-import pdfplumber
 import re
-import nltk
 from typing import Dict, List, Tuple, Optional
 from dataclasses import dataclass
-from langchain.text_splitter import RecursiveCharacterTextSplitter
-from langchain.schema import Document
-import textstat
-import pandas as pd
-from sklearn.feature_extraction.text import TfidfVectorizer
-from sklearn.metrics.pairwise import cosine_similarity
-import numpy as np
-from io import BytesIO
-import os
-
-# Download required NLTK data
-try:
-    nltk.data.find('tokenizers/punkt')
-except LookupError:
-    nltk.download('punkt')
-
-try:
-    nltk.data.find('corpora/stopwords')
-except LookupError:
-    nltk.download('stopwords')
-
-@dataclass
-class ResumeSection:
-    name: str
-    content: str
-    start_line: int
-    end_line: int
-    score: float = 0.0
-
-@dataclass
-class ATSMetrics:
-    keyword_score: float
-    formatting_score: float
-    readability_score: float
-    section_score: float
-    overall_score: float
-    missing_keywords: List[str]
-    suggestions: List[str]
+import json
+from functools import lru_cache
+import time
 
 @dataclass
 class ATSAnalysis:
+    """Streamlined ATS analysis results"""
     total_score: float
     component_scores: Dict[str, float]
     missing_keywords: List[str]
-    sections_analysis: Dict[str, str]
-    formatting_checks: Dict[str, bool]
+    recommendations: List[str]
+    issues: List[str]
 
-class ResumeProcessor:
+class OptimizedResumeProcessor:
+    """Optimized resume processor focused on speed and efficiency"""
+    
     def __init__(self):
-        self.text_splitter = RecursiveCharacterTextSplitter(
-            chunk_size=1000,
-            chunk_overlap=200,
-            length_function=len,
-        )
-        
-        # Common resume sections
-        self.section_patterns = {
-            'contact': r'(contact|personal\s+information|header)',
-            'summary': r'(summary|profile|objective|about)',
-            'experience': r'(experience|work\s+history|employment|professional\s+experience)',
-            'education': r'(education|academic|qualifications)',
-            'skills': r'(skills|technical\s+skills|competencies)',
-            'projects': r'(projects|portfolio|key\s+projects)',
-            'certifications': r'(certifications|certificates|licenses)',
-            'achievements': r'(achievements|awards|honors|accomplishments)',
-            'languages': r'(languages|language\s+skills)',
-            'interests': r'(interests|hobbies|activities)'
-        }
-        
-        # ATS-friendly keywords for different roles (expanded from app.py)
+        # Simplified keyword sets for faster processing
         self.role_keywords = {
-            "data_scientist": [
+            'data_scientist': [
                 "python", "machine learning", "sql", "statistics", "tensorflow",
                 "pytorch", "pandas", "numpy", "scikit-learn", "deep learning",
                 "data visualization", "tableau", "power bi", "aws", "azure",
                 "natural language processing", "big data", "hadoop", "spark"
             ],
-            "software_engineer": [
+            'software_engineer': [
                 "java", "python", "javascript", "react", "node.js", "sql",
                 "git", "docker", "kubernetes", "aws", "agile", "ci/cd",
-                "rest api", "microservices", "cloud computing", "c++", "spring boot"
+                "rest api", "microservices", "cloud computing", "c++",
+                "spring boot",'algorithms', 'data structures'
             ],
-            "full_stack_developer": [
-                "html", "css", "javascript", "react", "angular", "vue.js",
-                "node.js", "express.js", "django", "java", "spring boot",
-                "graphql", "rest api", "sql", "mongodb", "firebase",
-                "git", "docker", "aws", "kubernetes", "devops", "ci/cd"
+            'product_manager': [
+                'product strategy', 'roadmap', 'agile', 'scrum', 'user stories', 
+                'stakeholder', 'analytics', 'metrics', 'kpis', 'market research', 
+                'user experience', 'a/b testing', 'wireframes', 'mvp'
             ],
-            "data_analyst": [
-                "sql", "excel", "power bi", "tableau", "python", "r",
-                "pandas", "numpy", "data visualization", "statistics",
-                "business intelligence", "google analytics", "a/b testing"
+            'marketing_manager': [
+                'digital marketing', 'seo', 'sem', 'social media', 'content marketing', 
+                'email marketing', 'analytics', 'campaign management', 'brand', 
+                'conversion', 'lead generation', 'roi', 'crm'
             ],
-            "devops_engineer": [
-                "devops", "ci/cd", "docker", "kubernetes", "ansible", "terraform",
-                "jenkins", "git", "bash", "shell scripting", "aws", "azure", "gcp",
-                "monitoring", "prometheus", "grafana", "infrastructure as code"
-            ],
-            "cybersecurity_analyst": [
-                "network security", "firewalls", "penetration testing", "siem",
-                "incident response", "vulnerability management", "risk assessment",
-                "encryption", "ethical hacking", "wireshark", "nmap", "ids/ips",
-                "compliance", "iso 27001", "gdpr"
-            ],
-            "ui_ux_designer": [
-                "ui design", "ux design", "wireframing", "prototyping", "figma",
-                "adobe xd", "sketch", "user research", "usability testing",
-                "interaction design", "information architecture", "design systems",
-                "responsive design", "accessibility"
-            ],
-            "product_manager": [
-                "product strategy", "roadmap", "agile", "scrum", "stakeholder management",
-                "data analysis", "user research", "kpi", "metrics", "jira",
-                "product lifecycle", "market analysis", "competitive analysis",
-                "go-to-market", "a/b testing"
-            ],
-            "marketing_manager": [
-                "seo", "sem", "google analytics", "social media", "content marketing",
-                "email marketing", "campaign management", "roi", "conversion optimization",
-                "marketing automation", "hubspot", "salesforce", "branding", "ppc"
-            ],
-            "general": [
-                "leadership", "communication", "problem-solving", "teamwork", "analytical",
-                "project management", "time management", "adaptability",
-                "microsoft office", "excel", "powerpoint", "presentation skills"
+            'business_analyst': [
+                'business analysis', 'requirements', 'process improvement', 
+                'stakeholder management', 'documentation', 'sql', 'excel', 
+                'data analysis', 'reporting', 'workflow', 'testing'
             ]
         }
-
-    def extract_text_from_pdf(self, pdf_path: str) -> str:
-        """Extract text from PDF file"""
-        try:
-            with pdfplumber.open(pdf_path) as pdf:
-                text = ""
-                for page in pdf.pages:
-                    page_text = page.extract_text()
-                    if page_text:
-                        text += page_text + "\n"
-                return text.strip()
-        except Exception as e:
-            raise Exception(f"Error extracting text from PDF: {str(e)}")
-
-    def extract_text_from_docx(self, docx_path: str) -> str:
-        """Extract text from DOCX file"""
-        try:
-            from docx import Document
-            doc = Document(docx_path)
-            text = ""
-            for paragraph in doc.paragraphs:
-                text += paragraph.text + "\n"
-            return text.strip()
-        except Exception as e:
-            raise Exception(f"Error extracting text from DOCX: {str(e)}")
-
-    def clean_text(self, text: str) -> str:
-        """Clean and normalize text"""
-        # Remove extra whitespace and normalize line breaks
-        text = re.sub(r'\s+', ' ', text)
-        text = re.sub(r'\n\s*\n', '\n', text)
-        return text.strip()
-
-    def identify_sections(self, text: str) -> List[ResumeSection]:
-        """Identify and extract resume sections"""
-        lines = text.split('\n')
-        sections = []
         
-        # Find section headers
-        section_starts = {}
-        for i, line in enumerate(lines):
-            line_lower = line.lower().strip()
-            for section_name, pattern in self.section_patterns.items():
-                if re.search(pattern, line_lower) and len(line.strip()) < 50:
-                    section_starts[section_name] = i
-                    break
+        # Common ATS-friendly formatting patterns
+        self.formatting_patterns = {
+            'bullet_points': r'[•\-\*]',
+            'dates': r'\b(20\d{2}|19\d{2})\b',
+            'phone': r'\b\d{3}[-.]?\d{3}[-.]?\d{4}\b',
+            'email': r'\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Z|a-z]{2,}\b',
+            'skills_separators': r'[,|;]',
+            'section_headers': r'^[A-Z\s]{2,}$'
+        }
         
-        # Extract section content
-        section_names = list(section_starts.keys())
-        for i, section_name in enumerate(section_names):
-            start_line = section_starts[section_name]
-            end_line = section_starts[section_names[i + 1]] if i + 1 < len(section_names) else len(lines)
+        # Section identification patterns (optimized)
+        self.section_patterns = {
+            'summary': r'(?i)(summary|profile|objective|about|overview|highlights)',
+            'experience': r'(?i)(experience|employment|work\s+history|professional|internship)',
+            'education': r'(?i)(education|academic|qualification)',
+            'skills': r'(?i)(skills|competencies|technical|technologies|expertise)',
+            'projects': r'(?i)(projects|portfolio)',
+            'certifications': r'(?i)(certifications|certificates|licenses|awards|certification)',
+            'achievements': r'(?i)(achievements|awards|honors|recognitions)',
+            'languages': r'(?i)(languages|language\s+skills)'
+        }
+    
+    @lru_cache(maxsize=50)
+    def get_role_keywords(self, role: str) -> List[str]:
+        #Get cached keywords for a role
+        role_key = role.lower().replace(' ', '_')
+        return self.role_keywords.get(role_key, [])
+    
+    def extract_sections(self, resume_text: str) -> Dict[str, str]:
+        #section extraction
+        sections = {}
+        lines = resume_text.split('\n')
+        current_section = None
+        current_content = []
+        
+        for line in lines:
+            line = line.strip()
+            if not line:
+                continue
             
-            content = '\n'.join(lines[start_line:end_line])
-            sections.append(ResumeSection(
-                name=section_name,
-                content=content,
-                start_line=start_line,
-                end_line=end_line
-            ))
+            # Check if line is a section header
+            is_header = False
+            section_name = None
+            
+            # Quick check for common section headers
+            if len(line) < 50 and line.isupper():
+                for section, pattern in self.section_patterns.items():
+                    if re.search(pattern, line):
+                        is_header = True
+                        section_name = section
+                        break
+            
+            if is_header:
+                # Save previous section
+                if current_section and current_content:
+                    sections[current_section] = '\n'.join(current_content)
+                
+                # Start new section
+                current_section = section_name
+                current_content = []
+            else:
+                if current_section:
+                    current_content.append(line)
+                else:
+                    # Content before any section
+                    if 'header' not in sections:
+                        sections['header'] = ''
+                    sections['header'] += line + '\n'
+        
+        # Save last section
+        if current_section and current_content:
+            sections[current_section] = '\n'.join(current_content)
         
         return sections
-
-    def chunk_text(self, text: str) -> List[Document]:
-        """Split text into chunks for processing"""
-        documents = self.text_splitter.create_documents([text])
-        return documents
-
-    def calculate_keyword_score(self, text: str, job_role: str) -> Tuple[float, List[str]]:
-        """Calculate keyword relevance score"""
-        if job_role not in self.role_keywords:
-            return 0.0, []
+    
+    def calculate_keyword_match_score(self, text: str, keywords: List[str]) -> Tuple[float, List[str]]:
+        #Fast keyword matching with caching
+        if not keywords:
+            return 50.0, []
         
-        target_keywords = self.role_keywords[job_role]
         text_lower = text.lower()
-        
         found_keywords = []
-        for keyword in target_keywords:
+        missing_keywords = []
+        
+        for keyword in keywords:
             if keyword.lower() in text_lower:
                 found_keywords.append(keyword)
-        
-        score = len(found_keywords) / len(target_keywords) * 100
-        missing_keywords = [kw for kw in target_keywords if kw.lower() not in text_lower]
-        
-        return min(score, 100.0), missing_keywords
-
-    def calculate_formatting_score(self, text: str) -> float:
-        """Calculate formatting score based on structure"""
-        lines = text.split('\n')
-        score = 0.0
-        
-        # Check for bullet points
-        bullet_count = sum(1 for line in lines if re.match(r'^\s*[•\-\*]\s+', line))
-        if bullet_count > 0:
-            score += 20
-        
-        # Check for consistent formatting
-        if len(lines) > 10:
-            score += 20
-        
-        # Check for section headers (capitalized, short lines)
-        header_count = sum(1 for line in lines if len(line.strip()) < 50 and line.strip().isupper())
-        if header_count > 3:
-            score += 20
-        
-        # Check for dates (experience/education)
-        date_count = len(re.findall(r'\b(19|20)\d{2}\b', text))
-        if date_count > 0:
-            score += 20
-        
-        # Check for contact information
-        email_count = len(re.findall(r'\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Z|a-z]{2,}\b', text))
-        phone_count = len(re.findall(r'\b\d{3}[-.]?\d{3}[-.]?\d{4}\b', text))
-        if email_count > 0 and phone_count > 0:
-            score += 20
-        
-        return min(score, 100.0)
-
-    def calculate_readability_score(self, text: str) -> float:
-        """Calculate readability score using Flesch Reading Ease"""
-        try:
-            # Remove special characters and numbers for readability calculation
-            clean_text = re.sub(r'[^\w\s]', ' ', text)
-            clean_text = re.sub(r'\d+', '', clean_text)
-            
-            if len(clean_text.split()) < 10:
-                return 50.0  # Default score for very short text
-            
-            flesch_score = textstat.flesch_reading_ease(clean_text)
-            # Convert to 0-100 scale (higher is better for resumes)
-            if flesch_score >= 80:
-                return 100.0
-            elif flesch_score >= 60:
-                return 80.0
-            elif flesch_score >= 40:
-                return 60.0
             else:
-                return 40.0
-        except:
+                missing_keywords.append(keyword)
+        
+        # Calculate score with bonus for multiple occurrences
+        base_score = (len(found_keywords) / len(keywords)) * 100
+        
+        # Bonus for keyword density
+        total_keyword_occurrences = sum(text_lower.count(kw.lower()) for kw in found_keywords)
+        density_bonus = min(total_keyword_occurrences * 2, 20)        
+        final_score = min(base_score + density_bonus, 100)
+        
+        return final_score, missing_keywords
+    
+    def analyze_formatting(self, text: str) -> Dict[str, float]:
+        #formatting analysis
+        scores = {}
+        
+        # 30 point assign for Bullet points section
+        bullet_count = len(re.findall(self.formatting_patterns['bullet_points'], text))
+        scores['bullet_points'] = min(bullet_count * 10, 30)
+        
+        # Date formatting 20 points for this section
+        date_count = len(re.findall(self.formatting_patterns['dates'], text))
+        scores['dates'] = min(date_count * 5, 20)
+        
+        # Contact information 20 points
+        contact_score = 0
+        if re.search(self.formatting_patterns['email'], text):
+            contact_score += 10
+        if re.search(self.formatting_patterns['phone'], text):
+            contact_score += 10
+        scores['contact'] = contact_score
+        
+        # Structure and length 30 points
+        word_count = len(text.split())
+        if 300 <= word_count <= 800:
+            scores['length'] = 30
+        elif 200 <= word_count < 300 or 800 < word_count <= 1200:
+            scores['length'] = 25
+        else:
+            scores['length'] = 15
+        
+        return scores
+    
+    def calculate_readability_score(self, text: str) -> float:
+        #Simple readability calculation
+        sentences = len([s for s in text.split('.') if s.strip()])
+        words = len(text.split())
+        
+        if sentences == 0:
             return 50.0
-
-    def calculate_section_score(self, sections: List[ResumeSection]) -> float:
-        """Calculate score based on resume sections"""
-        essential_sections = ['contact', 'experience', 'education', 'skills']
-        found_sections = [s.name for s in sections]
         
-        score = 0.0
-        for section in essential_sections:
-            if section in found_sections:
-                score += 25
+        avg_sentence_length = words / sentences
         
-        # Bonus for additional sections
-        additional_sections = ['summary', 'projects', 'certifications', 'achievements']
-        for section in additional_sections:
-            if section in found_sections:
-                score += 5
+        # Optimal range: 15-25 words per sentence
+        if 15 <= avg_sentence_length <= 25:
+            return 100.0
+        elif 10 <= avg_sentence_length < 15 or 25 < avg_sentence_length <= 35:
+            return 80.0
+        else:
+            return 60.0
+    
+    def analyze_section_completeness(self, sections: Dict[str, str]) -> float:
+        #chechking about mendatory or non mendatory section details
+        essential_sections = ['experience', 'education', 'skills']
+        optional_sections = ['summary', 'projects', 'certifications']
         
-        return min(score, 100.0)
-
-    def calculate_ats_score(self, text: str, job_role: str, sections: List[ResumeSection]) -> ATSMetrics:
-        """Calculate overall ATS score"""
-        keyword_score, missing_keywords = self.calculate_keyword_score(text, job_role)
-        formatting_score = self.calculate_formatting_score(text)
-        readability_score = self.calculate_readability_score(text)
-        section_score = self.calculate_section_score(sections)
+        found_essential = sum(1 for section in essential_sections if section in sections and sections[section].strip())
+        found_optional = sum(1 for section in optional_sections if section in sections and sections[section].strip())
         
-        # Weighted average
-        overall_score = (
-            keyword_score * 0.4 +
-            formatting_score * 0.2 +
-            readability_score * 0.2 +
-            section_score * 0.2
-        )
+        # Essential sections are percentage 70% and optional 30%
+        essential_score = (found_essential / len(essential_sections)) * 70
+        optional_score = min(found_optional / len(optional_sections), 1.0) * 30
         
-        # Generate suggestions
-        suggestions = []
-        if keyword_score < 60:
-            suggestions.append("Add more relevant keywords for the target role")
-        if formatting_score < 60:
-            suggestions.append("Improve formatting with bullet points and consistent structure")
-        if readability_score < 60:
-            suggestions.append("Simplify language and improve readability")
-        if section_score < 80:
-            suggestions.append("Ensure all essential sections are present")
-        
-        return ATSMetrics(
-            keyword_score=keyword_score,
-            formatting_score=formatting_score,
-            readability_score=readability_score,
-            section_score=section_score,
-            overall_score=overall_score,
-            missing_keywords=missing_keywords,
-            suggestions=suggestions
-        )
+        return essential_score + optional_score
     
     def comprehensive_ats_analysis(self, resume_text: str, job_role: str, job_description: str = "") -> ATSAnalysis:
-        """Comprehensive ATS analysis similar to app.py"""
-        # Extract sections
-        sections = self.extract_sections(resume_text)
+        #comprehensive ATS analysis
         
-        # Initialize scoring components
-        scores = {
-            'keyword_match': 0,
-            'formatting': 0,
-            'section_completeness': 0,
-            'readability': 0,
-            'length_appropriateness': 0
-        }
+        keywords = self.get_role_keywords(job_role)
         
-        # 1. Keyword Analysis (30% weight)
-        keywords = self.role_keywords.get(job_role.lower().replace(' ', '_'), self.role_keywords['general'])
         if job_description:
-            # Extract additional keywords from job description
-            job_keywords = self._extract_keywords_from_description(job_description)
-            keywords.extend(job_keywords)
+            # Simple keyword extraction from job description
+            jd_words = re.findall(r'\b[a-zA-Z]{3,}\b', job_description.lower())
+            # Add unique technical terms
+            tech_terms = [word for word in jd_words if len(word) > 4 and word not in ['experience', 'required', 'preferred', 'skills']]
+            keywords.extend(tech_terms[:10])  # Add top 10 additional areaas
         
-        keyword_count = sum(1 for keyword in keywords if keyword.lower() in resume_text.lower())
-        scores['keyword_match'] = min((keyword_count / len(keywords)) * 100, 100) if keywords else 0
+        # Keyword analysis
+        keyword_score, missing_keywords = self.calculate_keyword_match_score(resume_text, keywords)
         
-        # 2. Formatting Analysis (20% weight)
-        formatting_checks = {
-            'has_bullets': bool(re.search(r'[•·▪▫◦‣⁃●○■□◆◇➔→⇒➤]|^\s*[-*+>]\s+', resume_text, re.MULTILINE)),
-            'proper_sections': sum(1 for s in sections.values() if s.strip()) >= 4,
-            'no_tables': 'table' not in resume_text.lower(),
-            'no_images': True,  # Assuming text-based resume
-            'consistent_formatting': self._check_formatting_consistency(resume_text)
-        }
-        scores['formatting'] = (sum(formatting_checks.values()) / len(formatting_checks)) * 100
+        # Formatting analysis
+        formatting_scores = self.analyze_formatting(resume_text)
+        formatting_score = sum(formatting_scores.values())
         
-        # 3. Section Completeness (30% weight)
-        essential_sections = ['contact', 'experience', 'education', 'skills', 'projects', 'certifications', 'achievements']
-        present_sections = sum(1 for s in essential_sections if sections.get(s, '').strip())
-        scores['section_completeness'] = (present_sections / len(essential_sections)) * 100
+        # Section analysis
+        sections = self.extract_sections(resume_text)
+        section_score = self.analyze_section_completeness(sections)
         
-        # 4. Readability (10% weight)
-        scores['readability'] = self.calculate_readability_score(resume_text)
+        # Readability analysis
+        readability_score = self.calculate_readability_score(resume_text)
         
-        # 5. Length Appropriateness (10% weight)
-        word_count = len(resume_text.split())
-        if 300 <= word_count <= 800:
-            scores['length_appropriateness'] = 100
-        elif 200 <= word_count < 300 or 800 < word_count <= 1000:
-            scores['length_appropriateness'] = 70
-        else:
-            scores['length_appropriateness'] = 40
+        # Calculate overall score (weighted average)
+        total_score = (
+            keyword_score * 0.35 + 
+            formatting_score * 0.25 +   
+            section_score * 0.25 +      
+            readability_score * 0.15    
+        )
         
-        # Calculate weighted total
-        weights = {
-            'keyword_match': 0.3,
-            'formatting': 0.2,
-            'section_completeness': 0.3,
-            'readability': 0.1,
-            'length_appropriateness': 0.1
+        # Component scores for detailed feedback
+        component_scores = {
+            'keyword_match': keyword_score,
+            'formatting': formatting_score,
+            'section_completeness': section_score,
+            'readability': readability_score,
+            'length_appropriateness': formatting_scores.get('length', 50)
         }
         
-        total_score = sum(scores[key] * weights[key] for key in scores)
+        # recommendations system
+        recommendations = []
+        issues = []
         
-        # Find missing keywords
-        missing_keywords = [kw for kw in keywords if kw.lower() not in resume_text.lower()]
+        if keyword_score < 60:
+            recommendations.append("Add more role-specific keywords throughout your resume")
+            issues.append("Low keyword match with target role")
+        
+        if formatting_score < 70:
+            recommendations.append("Improve formatting with bullet points and consistent structure")
+            issues.append("Formatting could be more ATS-friendly")
+        
+        if section_score < 80:
+            recommendations.append("Ensure all essential sections are present and complete")
+            issues.append("Missing important resume sections")
+        
+        if readability_score < 70:
+            recommendations.append("Simplify sentence structure for better readability")
+            issues.append("Content readability needs improvement")
+        
+        # Specific formatting recommendations
+        if formatting_scores['bullet_points'] < 20:
+            recommendations.append("Use bullet points to highlight achievements")
+        
+        if formatting_scores['contact'] < 20:
+            recommendations.append("Include complete contact information")
         
         return ATSAnalysis(
-            total_score=round(total_score, 1),
-            component_scores=scores,
-            missing_keywords=missing_keywords[:10],  # Top 10 missing
-            sections_analysis=sections,
-            formatting_checks=formatting_checks
+            total_score=total_score,
+            component_scores=component_scores,
+            missing_keywords=missing_keywords[:10],
+            recommendations=recommendations[:7],
+            issues=issues[:5]                  
         )
     
-    def extract_sections(self, text: str) -> Dict[str, str]:
-        """Extract common resume sections (from app.py)"""
-        sections = {
-            'contact': '',
-            'summary': '',
-            'experience': '',
-            'education': '',
-            'skills': '',
-            'projects': '',
-            'certifications': '',
-            'achievements': '',
+    def extract_contact_info(self, text: str) -> Dict[str, str]:
+        #contact information extraction
+        contact_info = {}
+        
+        # email
+        email_match = re.search(self.formatting_patterns['email'], text)
+        if email_match:
+            contact_info['email'] = email_match.group()
+        
+        # phone
+        phone_match = re.search(self.formatting_patterns['phone'], text)
+        if phone_match:
+            contact_info['phone'] = phone_match.group()
+        
+        # linkedIn
+        linkedin_match = re.search(r'linkedin\.com/in/([\w-]+)', text, re.IGNORECASE)
+        if linkedin_match:
+            contact_info['linkedin'] = f"linkedin.com/in/{linkedin_match.group(1)}"
+        
+        # gitHub
+        github_match = re.search(r'github\.com/([\w-]+)', text, re.IGNORECASE)
+        if github_match:
+            contact_info['github'] = f"github.com/{github_match.group(1)}"
+        
+        return contact_info
+    
+    def extract_skills(self, text: str, skills_section: str = "") -> List[str]:
+        skills = []
+        
+        if skills_section:
+            text_to_analyze = skills_section
+        else:
+            sections = self.extract_sections(text)
+            text_to_analyze = sections.get('skills', text)
+        
+        skill_candidates = re.split(r'[,;\n\|]', text_to_analyze)
+        
+        for skill in skill_candidates:
+            skill = skill.strip()
+            if skill and len(skill) > 2 and len(skill) < 50:
+                # Remove bullet points and numbers
+                skill = re.sub(r'^[•\-\*\d\.\)]+\s*', '', skill)
+                if skill:
+                    skills.append(skill)
+        
+        return skills[:]
+    
+    def calculate_experience_score(self, experience_text: str) -> float:
+        if not experience_text.strip():
+            return 0.0
+        
+        score = 0.0
+        
+        # if date is present 25 point will be add on
+        if re.search(self.formatting_patterns['dates'], experience_text):
+            score += 25
+        
+        #if bullet point is presentated add on 25 points
+        bullet_count = len(re.findall(self.formatting_patterns['bullet_points'], experience_text))
+        score += min(bullet_count * 5, 25)
+        
+        # Check for quantified achievement 30 points
+        quantifiers = r'\b\d+%|\b\d+\+|\b\d+[kmbt]|\$\d+|increased|improved|reduced|saved|achieved'
+        if re.search(quantifiers, experience_text.lower()):
+            score += 30
+        
+        # action verbs- 20 points
+        action_verbs = ['led', 'managed', 'developed', 'implemented', 'created', 'designed', 'built', 'achieved', 'improved']
+        found_verbs = sum(1 for verb in action_verbs if verb in experience_text.lower())
+        score += min(found_verbs * 3, 20)
+        
+        return min(score, 100)
+    
+    def quick_resume_summary(self, resume_text: str) -> Dict[str, any]:
+        #Generate quick resume summary stats
+        sections = self.extract_sections(resume_text)
+        contact_info = self.extract_contact_info(resume_text)
+        
+        word_count = len(resume_text.split())
+        
+        # Count key elements
+        bullet_points = len(re.findall(self.formatting_patterns['bullet_points'], resume_text))
+        dates_mentioned = len(re.findall(self.formatting_patterns['dates'], resume_text))
+        
+        return {
+            'word_count': word_count,
+            'sections_found': list(sections.keys()),
+            'contact_complete': len(contact_info) >= 2, 
+            'has_bullets': bullet_points > 0,
+            'has_dates': dates_mentioned > 0,
+            'estimated_pages': max(1, word_count // 300) 
         }
-        
-        # Common section headers
-        section_patterns = {
-            'contact': r'(?i)(contact|email|phone|\+91|tel|address|linkedin|github|portfolio)',
-            'summary': r'(?i)(summary|objective|profile|about|overview|highlights)',
-            'experience': r'(?i)(experience|employment|work history|professional experience|internship|industry experience|relevant experience)',
-            'education': r'(?i)(education|academic|qualification|training & education)',
-            'skills': r'(?i)(skills|technical skills|competencies|expertise|tools & technologies|soft skills|other skills)',
-            'projects': r'(?i)(projects|portfolio|projects & responsibilities|key projects|projects & accomplishments)',
-            'certifications': r'(?i)(certifications?|licenses?|awards?|certification)',
-            'achievements': r'(?i)(achievements|accomplishments|awards|recognitions|honors|awards & recognition)'
-        }
-        
-        lines = text.split('\n')
-        current_section = None
-        
-        for line in lines:
-            # Check if line matches any section header
-            for section, pattern in section_patterns.items():
-                if re.search(pattern, line):
-                    current_section = section
-                    break
-            
-            # Add line to current section
-            if current_section:
-                sections[current_section] += line + '\n'
-        
-        return sections
     
-    def _extract_keywords_from_description(self, description: str) -> List[str]:
-        """Extract keywords from job description (from app.py)"""
-        tech_pattern = r"""\b(?:
-            # Programming Languages
-                python|java|javascript|typescript|c\+\+|c\#|go|rust|php|ruby|perl|scala|swift|kotlin|objective-c|
-                dart|haskell|ocaml|clojure|lisp|prolog|elixir|erlang|
-
-                # Web & Mobile Frameworks
-                react|angular|vue|svelte|next\.js|nuxt\.js|react native|flutter|
-
-                # Cloud Platforms
-                aws|azure|gcp|firebase|digitalocean|heroku|
-
-                # DevOps & Infra
-                docker|kubernetes|jenkins|terraform|ansible|git|ci/cd|
-
-                # Databases
-                sql|mysql|postgresql|oracle|mongodb|cassandra|redis|neo4j|
-
-                # Data & AI
-                data engineering|data science|machine learning|deep learning|artificial intelligence|
-                natural language processing|nlp|computer vision|robotics|
-
-                # Security & Blockchain
-                cybersecurity|ethical hacking|penetration testing|network security|firewalls|
-                siem|incident response|vulnerability management|risk assessment|encryption|
-                wireshark|nmap|ids/ips|iso 27001|gdpr|compliance|cryptography|blockchain)\b"""
+    def identify_resume_gaps(self, sections: Dict[str, str], job_role: str) -> List[str]:
+        #Identify common gaps in resume based on role
+        gaps = []
         
-        skills_pattern = r"""\b(?:
-                # Soft Skills
-                leadership|communication|analytical|strategic|innovative|problem-solving|
-                teamwork|time management|adaptability|
-
-                # Business & Productivity
-                microsoft office|excel|powerpoint|word|outlook|presentation skills|
-                data analysis|data visualization|data modeling|data warehousing|data mining)\b"""
-
-        tech_keywords = re.findall(tech_pattern, description.lower())
-        skill_keywords = re.findall(skills_pattern, description.lower())
+        if 'experience' not in sections or not sections['experience'].strip():
+            gaps.append("Missing or incomplete work experience section")
         
-        return list(set(tech_keywords + skill_keywords))
+        if 'skills' not in sections or not sections['skills'].strip():
+            gaps.append("Missing technical skills section")
+        
+        if 'education' not in sections or not sections['education'].strip():
+            gaps.append("Missing education information")
+        
+        if job_role.lower() in ['data_scientist', 'software_engineer']:
+            if 'projects' not in sections or not sections['projects'].strip():
+                gaps.append("Consider adding a projects section to showcase technical work")
+        
+        if job_role.lower() in ['product_manager', 'marketing_manager']:
+            if not any(metric in sections.get('experience', '').lower() for metric in ['%', 'increased', 'improved', 'roi']):
+                gaps.append("Add quantified business metrics to experience descriptions")
+        
+        #quantified achievements
+        if not re.search(r'\d+%|\d+\+|\$\d+', sections.get('experience', '')):
+            gaps.append("Include specific numbers and metrics in achievements")
+        
+        return gaps[:10]
     
-    def _check_formatting_consistency(self, text: str) -> bool:
-        """Check if formatting is consistent (from app.py)"""
-        lines = text.split('\n')
-        bullet_styles = set()
+    def optimize_for_ats(self, resume_text: str, target_keywords: List[str]) -> str:
+        #ATS optimization suggestions
+        lines = resume_text.split('\n')
+        suggestions = []
         
-        for line in lines:
-            if re.match(r'^\s*[•·▪▫◦‣⁃●○■□◆◇➔→⇒➤*]\s+', line):
-                bullet = re.match(r'^\s*([•·▪▫◦‣⁃●○■□◆◇➔→⇒➤*])\s+', line).group(1)
-                bullet_styles.add(bullet)
+        text_lower = resume_text.lower()
+        missing_keywords = [kw for kw in target_keywords if kw.lower() not in text_lower]
         
-        # Consistent if using 0-1 bullet styles
-        return len(bullet_styles) <= 1
+        if missing_keywords:
+            suggestions.append(f"\nKEYWORD OPTIMIZATION:")
+            suggestions.append(f"Consider naturally incorporating: {', '.join(missing_keywords[:5])}")
+        
+        # Check formatting
+        if not re.search(self.formatting_patterns['bullet_points'], resume_text):
+            suggestions.append(f"\nFORMATTING TIPS:")
+            suggestions.append("• Use bullet points to organize information")
+            suggestions.append("• Ensure consistent formatting throughout")
+        
+        # Check for quantified achievements
+        if not re.search(r'\d+%|\d+\+|\$\d+', resume_text):
+            suggestions.append(f"\nACHIEVEMENT ENHANCEMENT:")
+            suggestions.append("• Add specific numbers and percentages")
+            suggestions.append("• Quantify your accomplishments with metrics")
+        
+        return '\n'.join(lines + suggestions) if suggestions else resume_text
 
-    def process_resume(self, file_path: str = None, text: str = None, job_role: str = "software_engineer") -> Dict:
-        """Main method to process resume"""
-        try:
-            # Extract text
-            if file_path:
-                if file_path.lower().endswith('.pdf'):
-                    text = self.extract_text_from_pdf(file_path)
-                elif file_path.lower().endswith('.docx'):
-                    text = self.extract_text_from_docx(file_path)
-                else:
-                    raise ValueError("Unsupported file format")
-            elif text:
-                text = text
-            else:
-                raise ValueError("Either file_path or text must be provided")
-            
-            # Clean text
-            text = self.clean_text(text)
-            
-            # Identify sections
-            sections = self.identify_sections(text)
-            
-            # Create chunks
-            chunks = self.chunk_text(text)
-            
-            # Calculate ATS score
-            ats_metrics = self.calculate_ats_score(text, job_role, sections)
-            
-            return {
-                'text': text,
-                'sections': sections,
-                'chunks': chunks,
-                'ats_metrics': ats_metrics,
-                'word_count': len(text.split()),
-                'line_count': len(text.split('\n'))
-            }
-            
-        except Exception as e:
-            raise Exception(f"Error processing resume: {str(e)}")
-
-# Example usage
-if __name__ == "__main__":
-    processor = ResumeProcessor()
+# Performance testing and validation
+def test_performance():
+    #Test the performance of optimized processor
+    processor = OptimizedResumeProcessor()
     
-    # Test with sample text
-    sample_text = """
+    sample_resume = """
     John Doe
-    john.doe@email.com | (555) 123-4567 | LinkedIn: linkedin.com/in/johndoe
+    john.doe@email.com | (555) 123-4567
     
     SUMMARY
     Experienced software engineer with 5+ years in full-stack development.
     
-    EXPERIENCE
+    EXPERIENCE  
     Senior Software Engineer | Tech Corp | 2020-2023
     • Developed web applications using Python and React
-    • Led team of 3 developers
-    • Implemented CI/CD pipelines
+    • Improved system performance by 40%
+    • Led team of 3 developers on critical projects
+    
+    Software Engineer | StartupXYZ | 2018-2020
+    • Built REST APIs serving 100k+ requests daily
+    • Implemented CI/CD pipelines reducing deployment time by 60%
     
     EDUCATION
     Bachelor of Computer Science | University of Tech | 2018
     
     SKILLS
-    Python, JavaScript, React, SQL, AWS, Docker
+    Python, JavaScript, React, Node.js, SQL, AWS, Docker, Git
+    
+    PROJECTS
+    E-commerce Platform | 2023
+    • Built full-stack application with React and Django
+    • Integrated payment processing and inventory management
     """
     
-    result = processor.process_resume(text=sample_text, job_role="software_engineer")
-    print(f"ATS Score: {result['ats_metrics'].overall_score:.1f}")
-    print(f"Missing Keywords: {result['ats_metrics'].missing_keywords}")
+    print("🔄 Testing OptimizedResumeProcessor performance...")
+    
+    # Test section extraction
+    start_time = time.time()
+    sections = processor.extract_sections(sample_resume)
+    print(f"⏱️ Section extraction: {time.time() - start_time:.3f}s")
+    print(f"Found sections: {list(sections.keys())}")
+    
+    # Test ATS analysis
+    start_time = time.time()
+    ats_analysis = processor.comprehensive_ats_analysis(sample_resume, "software_engineer")
+    print(f"⏱️ ATS analysis: {time.time() - start_time:.3f}s")
+    print(f"📊 ATS Score: {ats_analysis.total_score:.1f}/100")
+    print(f"🎯 Missing keywords: {ats_analysis.missing_keywords[:5]}")
+    
+    # Test contact extraction
+    start_time = time.time()
+    contact_info = processor.extract_contact_info(sample_resume)
+    print(f"⏱️ Contact extraction: {time.time() - start_time:.3f}s")
+    print(f"📞 Contact info: {contact_info}")
+    
+    # Test skills extraction
+    start_time = time.time()
+    skills = processor.extract_skills(sample_resume)
+    print(f"⏱️ Skills extraction: {time.time() - start_time:.3f}s")
+    print(f"🛠️ Extracted skills: {skills}")
+    
+    # Test quick summary
+    start_time = time.time()
+    summary = processor.quick_resume_summary(sample_resume)
+    print(f"⏱️ Quick summary: {time.time() - start_time:.3f}s")
+    print(f"📋 Summary: {summary}")
+
+if __name__ == "__main__":
+    test_performance()

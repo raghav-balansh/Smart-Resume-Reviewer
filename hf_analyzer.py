@@ -5,6 +5,9 @@ import re
 import json
 from dataclasses import dataclass
 import warnings
+import threading
+import time
+from functools import lru_cache
 warnings.filterwarnings("ignore")
 
 @dataclass
@@ -22,374 +25,100 @@ class OverallFeedback:
     recommendations: List[str]
     overall_score: float
 
-class HuggingFaceAnalyzer:
-    """Resume analyzer using Hugging Face Llama model"""
+class OptimizedHuggingFaceAnalyzer:
     
-    def __init__(self, model_name: str = "context-labs/meta-llama-Llama-3.2-3B-Instruct-FP16"):
+    def __init__(self, model_name: str = "microsoft/DialoGPT-medium", max_length: int = 256, batch_size: int = 1):
         self.model_name = model_name
+        self.max_length = max_length
+        self.batch_size = batch_size
         self.device = "cuda" if torch.cuda.is_available() else "cpu"
         self.tokenizer = None
         self.model = None
         self.pipeline = None
-        self._load_model()
+        self._cache = {}
+        self._lock = threading.Lock()
         
-        # Section-specific keywords for different roles
+        # Use rule-based analysis as primary with AI as secondary
+        self.use_ai = False  # Start with rule-based for speed
+        
+        # Enhanced role-specific keywords for better analysis
         self.role_keywords = {
             'data_scientist': {
-                'technical': ['python', 'r', 'sql', 'machine learning', 'deep learning', 'statistics', 'pandas', 'numpy', 'scikit-learn', 'tensorflow', 'pytorch'],
-                'tools': ['jupyter', 'tableau', 'power bi', 'matplotlib', 'seaborn', 'plotly', 'aws', 'azure', 'gcp', 'docker', 'kubernetes'],
-                'concepts': ['data analysis', 'data visualization', 'nlp', 'computer vision', 'big data', 'hadoop', 'spark']
+                'core_skills': ['python', 'r', 'sql', 'machine learning', 'statistics', 'data analysis'],
+                'tools': ['pandas', 'numpy', 'scikit-learn', 'tensorflow', 'pytorch', 'jupyter'],
+                'concepts': ['regression', 'classification', 'clustering', 'nlp', 'deep learning', 'visualization'],
+                'certifications': ['aws certified', 'google cloud', 'coursera', 'kaggle']
             },
             'software_engineer': {
-                'languages': ['python', 'java', 'javascript', 'typescript', 'c++', 'c#', 'go', 'rust'],
-                'frameworks': ['react', 'angular', 'vue', 'node.js', 'spring', 'django', 'flask', 'express'],
-                'tools': ['git', 'github', 'docker', 'kubernetes', 'aws', 'azure', 'jenkins', 'ci/cd'],
-                'concepts': ['rest api', 'graphql', 'microservices', 'agile', 'scrum', 'tdd', 'unit testing']
+                'languages': ['python', 'java', 'javascript', 'typescript', 'c++', 'go', 'rust'],
+                'frameworks': ['react', 'angular', 'vue', 'node.js', 'spring', 'django', 'flask'],
+                'tools': ['git', 'docker', 'kubernetes', 'jenkins', 'aws', 'azure', 'linux'],
+                'concepts': ['api', 'microservices', 'agile', 'scrum', 'testing', 'ci/cd', 'devops']
             },
             'product_manager': {
-                'methodologies': ['agile', 'scrum', 'kanban', 'lean', 'design thinking'],
-                'tools': ['jira', 'confluence', 'figma', 'sketch', 'analytics', 'sql', 'excel'],
-                'concepts': ['product strategy', 'roadmap', 'user stories', 'backlog', 'stakeholder management', 'a/b testing'],
-                'skills': ['leadership', 'communication', 'analytical', 'strategic thinking', 'market research']
+                'skills': ['product strategy', 'roadmap', 'agile', 'scrum', 'user stories', 'stakeholder'],
+                'tools': ['jira', 'confluence', 'figma', 'analytics', 'sql', 'tableau'],
+                'concepts': ['market research', 'user experience', 'metrics', 'kpis', 'growth', 'mvp'],
+                'soft_skills': ['leadership', 'communication', 'analytical', 'strategic thinking']
             },
             'marketing_manager': {
-                'digital': ['seo', 'sem', 'ppc', 'google ads', 'facebook ads', 'social media', 'content marketing'],
-                'tools': ['google analytics', 'hubspot', 'salesforce', 'marketo', 'adobe creative suite'],
-                'concepts': ['brand management', 'campaign management', 'roi', 'conversion optimization', 'customer acquisition'],
-                'skills': ['analytics', 'creativity', 'communication', 'project management']
+                'digital': ['seo', 'sem', 'ppc', 'social media', 'content marketing', 'email marketing'],
+                'tools': ['google analytics', 'hubspot', 'salesforce', 'marketo', 'hootsuite'],
+                'concepts': ['brand management', 'campaign', 'roi', 'conversion', 'lead generation'],
+                'skills': ['creativity', 'analytics', 'communication', 'project management']
+            },
+            'business_analyst': {
+                'skills': ['requirements analysis', 'process improvement', 'stakeholder management', 'documentation'],
+                'tools': ['excel', 'sql', 'tableau', 'power bi', 'visio', 'jira'],
+                'methodologies': ['agile', 'waterfall', 'lean', 'six sigma', 'business process modeling'],
+                'concepts': ['gap analysis', 'use cases', 'user stories', 'testing', 'validation']
             }
         }
+        
+        # Initialize lightweight analyzer
+        self._initialize_lightweight()
     
-    def _load_model(self):
-        """Load the Hugging Face model and tokenizer"""
+    def _initialize_lightweight(self):
+        self.use_ai = False
+    
+    def _load_ai_model(self):
+        """Load AI model only when needed (lazy loading)"""
+        if self.pipeline is not None:
+            return True
+            
         try:
-            print(f"Loading model: {self.model_name}")
-            print(f"Using device: {self.device}")
+            print("Loading AI model for enhanced analysis...")
             
-            # Load tokenizer
-            self.tokenizer = AutoTokenizer.from_pretrained(
-                self.model_name,
-                trust_remote_code=True,
-                padding_side="left"
-            )
+            # Use a very lightweight model or skip AI entirely for speed
+            self.tokenizer = AutoTokenizer.from_pretrained("gpt2")
+            self.model = AutoModelForCausalLM.from_pretrained("gpt2")
             
-            # Add pad token if it doesn't exist
             if self.tokenizer.pad_token is None:
                 self.tokenizer.pad_token = self.tokenizer.eos_token
             
-            # Load model
-            self.model = AutoModelForCausalLM.from_pretrained(
-                self.model_name,
-                torch_dtype=torch.float16 if self.device == "cuda" else torch.float32,
-                device_map="auto" if self.device == "cuda" else None,
-                trust_remote_code=True
-            )
-            
-            # Create pipeline
             self.pipeline = pipeline(
                 "text-generation",
                 model=self.model,
                 tokenizer=self.tokenizer,
-                device=0 if self.device == "cuda" else -1,
-                torch_dtype=torch.float16 if self.device == "cuda" else torch.float32,
-                max_new_tokens=512,
+                max_new_tokens=100,  # Very limited for speed
                 do_sample=True,
                 temperature=0.7,
-                top_p=0.9,
-                pad_token_id=self.tokenizer.eos_token_id
+                device=0 if self.device == "cuda" else -1
             )
             
-            print("Model loaded successfully!")
+            self.use_ai = True
+            print("AI model loaded successfully!")
+            return True
             
         except Exception as e:
-            print(f"Error loading model: {str(e)}")
-            print("Falling back to basic analysis...")
-            self.pipeline = None
+            print(f"Could not load AI model: {e}")
+            print("Continuing with rule-based analysis for optimal speed")
+            self.use_ai = False
+            return False
     
-    def _create_prompt(self, resume_text: str, job_role: str, analysis_type: str, section: str = None) -> str:
-        """Create prompts for different types of analysis"""
-        
-        if analysis_type == "overall":
-            prompt = f"""<|begin_of_text|><|start_header_id|>system<|end_header_id|>
-
-You are an expert resume reviewer and ATS specialist. Analyze this resume for a {job_role} position and provide comprehensive feedback.
-
-<|start_header_id|>user<|end_header_id|>
-
-Resume Text:
-{resume_text[:]}
-
-Please provide:
-1. Overall Assessment (2-3 sentences)
-2. Top 5 Strengths
-3. Top 5 Areas for Improvement
-4. Top 5 Recommendations
-5. Overall Score (0-100)
-
-Format your response as:
-**Overall Assessment:** [assessment]
-**Strengths:** 
-- [strength 1]
-- [strength 2] 
-- [strength 3]
-- [strength 4]
-- [strength 5]
-**Areas for Improvement:**
-- [improvement 1]
-- [improvement 2]
-- [improvement 3]
-- [improvement 4]
-- [improvement 5]
-**Recommendations:**
-- [recommendation 1]
-- [recommendation 2]
-- [recommendation 3]
-- [recommendation 4]
-- [recommendation 5]
-**Overall Score:** [score]/100
-
-<|start_header_id|>assistant<|end_header_id|>"""
-
-        elif analysis_type == "section":
-            prompt = f"""<|begin_of_text|><|start_header_id|>system<|end_header_id|>
-
-You are an expert resume reviewer. Analyze the {section} section of this resume for a {job_role} position.
-
-<|start_header_id|>user<|end_header_id|>
-
-Resume Text:
-{resume_text[:]}
-
-Focus on the {section} section and provide:
-1. Section Assessment (1-5 sentences)
-2. Score (0-100)
-3. Specific suggestions for improvement
-4. Missing keywords for this role
-
-Format your response as:
-**Section Assessment:** [assessment]
-**Score:** [score]/100
-**Suggestions:**
-- [suggestion 1]
-- [suggestion 2]
-- [suggestion 3]
-- [suggestion 4]
-**Missing Keywords:** [keyword1, keyword2, keyword3, keyword4, keyword5]
-
-<|start_header_id|>assistant<|end_header_id|>"""
-
-        elif analysis_type == "optimization":
-            prompt = f"""<|begin_of_text|><|start_header_id|>system<|end_header_id|>
-
-You are an expert resume writer. Create an optimized version of this resume for a {job_role} position.
-
-<|start_header_id|>user<|end_header_id|>
-
-Original Resume:
-{resume_text}
-
-Please rewrite this resume with:
-1. All relevant keywords naturally integrated
-2. Improved formatting for ATS scanning
-3. Stronger action verbs and quantified achievements
-4. Clear section headers
-5. Optimized length (aim for 500-700 words)
-
-Return ONLY the optimized resume text, properly formatted with clear sections.
-
-<|start_header_id|>assistant<|end_header_id|>"""
-
-        return prompt
-    
-    def _parse_response(self, response: str, analysis_type: str) -> Dict:
-        
-        try:
-            if analysis_type == "overall":
-                return self._parse_overall_response(response)
-            elif analysis_type == "section":
-                return self._parse_section_response(response)
-            elif analysis_type == "optimization":
-                return {"optimized_resume": response.strip()}
-        except Exception as e:
-            print(f"Error parsing response: {str(e)}")
-            return {"error": str(e)}
-    
-    def _parse_overall_response(self, response: str) -> Dict:
-        #Parse overall analysis response
-        result = {
-            "assessment": "",
-            "strengths": [],
-            "weaknesses": [],
-            "recommendations": [],
-            "overall_score": 0
-        }
-        
-        # Extract assessment
-        assessment_match = re.search(r'\*\*Overall Assessment:\*\*\s*(.+?)(?=\*\*|$)', response, re.DOTALL)
-        if assessment_match:
-            result["assessment"] = assessment_match.group(1).strip()
-        
-        # Extract strengths
-        strengths_match = re.search(r'\*\*Strengths:\*\*\s*(.+?)(?=\*\*|$)', response, re.DOTALL)
-        if strengths_match:
-            strengths_text = strengths_match.group(1)
-            result["strengths"] = [line.strip('- ').strip() for line in strengths_text.split('\n') if line.strip().startswith('-')]
-        
-        # Extract weaknesses
-        weaknesses_match = re.search(r'\*\*Areas for Improvement:\*\*\s*(.+?)(?=\*\*|$)', response, re.DOTALL)
-        if weaknesses_match:
-            weaknesses_text = weaknesses_match.group(1)
-            result["weaknesses"] = [line.strip('- ').strip() for line in weaknesses_text.split('\n') if line.strip().startswith('-')]
-        
-        # Extract recommendations
-        recommendations_match = re.search(r'\*\*Recommendations:\*\*\s*(.+?)(?=\*\*|$)', response, re.DOTALL)
-        if recommendations_match:
-            recommendations_text = recommendations_match.group(1)
-            result["recommendations"] = [line.strip('- ').strip() for line in recommendations_text.split('\n') if line.strip().startswith('-')]
-        
-        # Extract score
-        score_match = re.search(r'\*\*Overall Score:\*\*\s*(\d+)', response)
-        if score_match:
-            result["overall_score"] = int(score_match.group(1))
-        
-        return result
-    
-    def _parse_section_response(self, response: str) -> Dict:
-        """Parse section analysis response"""
-        result = {
-            "assessment": "",
-            "score": 0,
-            "suggestions": [],
-            "missing_keywords": []
-        }
-        
-        # Extract assessment
-        assessment_match = re.search(r'\*\*Section Assessment:\*\*\s*(.+?)(?=\*\*|$)', response, re.DOTALL)
-        if assessment_match:
-            result["assessment"] = assessment_match.group(1).strip()
-        
-        # Extract score
-        score_match = re.search(r'\*\*Score:\*\*\s*(\d+)', response)
-        if score_match:
-            result["score"] = int(score_match.group(1))
-        
-        # Extract suggestions
-        suggestions_match = re.search(r'\*\*Suggestions:\*\*\s*(.+?)(?=\*\*|$)', response, re.DOTALL)
-        if suggestions_match:
-            suggestions_text = suggestions_match.group(1)
-            result["suggestions"] = [line.strip('- ').strip() for line in suggestions_text.split('\n') if line.strip().startswith('-')]
-        
-        # Extract missing keywords
-        keywords_match = re.search(r'\*\*Missing Keywords:\*\*\s*(.+?)(?=\*\*|$)', response, re.DOTALL)
-        if keywords_match:
-            keywords_text = keywords_match.group(1).strip()
-            result["missing_keywords"] = [kw.strip() for kw in keywords_text.split(',') if kw.strip()]
-        
-        return result
-    
-    def analyze_overall(self, resume_text: str, job_role: str) -> OverallFeedback:
-        """Perform overall resume analysis"""
-        if not self.pipeline:
-            return self._fallback_overall_analysis(resume_text, job_role)
-        
-        try:
-            prompt = self._create_prompt(resume_text, job_role, "overall")
-            response = self.pipeline(prompt, max_new_tokens=512, do_sample=True, temperature=0.7)[0]['generated_text']
-            
-            # Extract only the assistant's response
-            if '<|start_header_id|>assistant<|end_header_id|>' in response:
-                response = response.split('<|start_header_id|>assistant<|end_header_id|>')[-1].strip()
-            
-            parsed = self._parse_response(response, "overall")
-            
-            return OverallFeedback(
-                strengths=parsed.get("strengths", []),
-                weaknesses=parsed.get("weaknesses", []),
-                recommendations=parsed.get("recommendations", []),
-                overall_score=parsed.get("overall_score", 0)
-            )
-            
-        except Exception as e:
-            print(f"Error in overall analysis: {str(e)}")
-            return self._fallback_overall_analysis(resume_text, job_role)
-    
-    def analyze_section(self, resume_text: str, job_role: str, section: str) -> SectionFeedback:
-        """Analyze a specific section of the resume"""
-        if not self.pipeline:
-            return self._fallback_section_analysis(resume_text, job_role, section)
-        
-        try:
-            prompt = self._create_prompt(resume_text, job_role, "section", section)
-            response = self.pipeline(prompt, max_new_tokens=400, do_sample=True, temperature=0.7)[0]['generated_text']
-            
-            # Extract only the assistant's response
-            if '<|start_header_id|>assistant<|end_header_id|>' in response:
-                response = response.split('<|start_header_id|>assistant<|end_header_id|>')[-1].strip()
-            
-            parsed = self._parse_response(response, "section")
-            
-            return SectionFeedback(
-                section=section,
-                score=parsed.get("score", 0),
-                feedback=parsed.get("assessment", ""),
-                suggestions=parsed.get("suggestions", []),
-                missing_keywords=parsed.get("missing_keywords", [])
-            )
-            
-        except Exception as e:
-            print(f"Error in section analysis: {str(e)}")
-            return self._fallback_section_analysis(resume_text, job_role, section)
-    
-    def optimize_resume(self, resume_text: str, job_role: str) -> str:
-        """Generate optimized resume"""
-        if not self.pipeline:
-            return resume_text
-        
-        try:
-            prompt = self._create_prompt(resume_text, job_role, "optimization")
-            response = self.pipeline(prompt, max_new_tokens=800, do_sample=True, temperature=0.6)[0]['generated_text']
-            
-            # Extract only the assistant's response
-            if '<|start_header_id|>assistant<|end_header_id|>' in response:
-                response = response.split('<|start_header_id|>assistant<|end_header_id|>')[-1].strip()
-            
-            return response
-            
-        except Exception as e:
-            print(f"Error in resume optimization: {str(e)}")
-            return resume_text
-    
-    def _fallback_overall_analysis(self, resume_text: str, job_role: str) -> OverallFeedback:
-        """Fallback analysis when model is not available"""
-        # Basic keyword analysis
-        keywords = self._get_role_keywords(job_role)
-        found_keywords = [kw for kw in keywords if kw.lower() in resume_text.lower()]
-        score = min((len(found_keywords) / len(keywords)) * 100, 100) if keywords else 50
-        
-        return OverallFeedback(
-            strengths=["Resume has good structure", "Contains relevant experience"],
-            weaknesses=["Could use more specific keywords", "Needs quantified achievements"],
-            recommendations=["Add more role-specific keywords", "Include metrics and numbers", "Improve formatting"],
-            overall_score=score
-        )
-    
-    def _fallback_section_analysis(self, resume_text: str, job_role: str, section: str) -> SectionFeedback:
-        """Fallback section analysis when model is not available"""
-        keywords = self._get_role_keywords(job_role)
-        section_text = self._extract_section_text(resume_text, section)
-        found_keywords = [kw for kw in keywords if kw.lower() in section_text.lower()]
-        score = min((len(found_keywords) / len(keywords)) * 100, 100) if keywords else 50
-        
-        return SectionFeedback(
-            section=section,
-            score=score,
-            feedback=f"The {section} section is present but could be improved.",
-            suggestions=["Add more specific details", "Include relevant keywords", "Use action verbs"],
-            missing_keywords=keywords[:5]  # Top 5 missing keywords
-        )
-    
+    @lru_cache(maxsize=100)
     def _get_role_keywords(self, job_role: str) -> List[str]:
-        """Get keywords for a specific role"""
+        """Get cached keywords for a role"""
         role_key = job_role.lower().replace(' ', '_')
         if role_key in self.role_keywords:
             keywords = []
@@ -398,52 +127,438 @@ Return ONLY the optimized resume text, properly formatted with clear sections.
             return keywords
         return []
     
-    def _extract_section_text(self, resume_text: str, section: str) -> str:
-        """Extract text for a specific section"""
-        lines = resume_text.split('\n')
-        section_text = []
+    def _calculate_keyword_score(self, text: str, keywords: List[str]) -> Tuple[float, List[str]]:
+        if not keywords:
+            return 50.0, []
+        
+        text_lower = text.lower()
+        found_keywords = []
+        missing_keywords = []
+        
+        for keyword in keywords:
+            if keyword.lower() in text_lower:
+                found_keywords.append(keyword)
+            else:
+                missing_keywords.append(keyword)
+        
+        score = (len(found_keywords) / len(keywords)) * 100
+        return score, missing_keywords[:10]  # Return top 10 missing
+    
+    def _analyze_structure(self, text: str) -> Dict[str, float]:
+        scores = {}
+        
+        # Section completeness
+        required_sections = ['experience', 'education', 'skills', 'summary']
+        found_sections = 0
+        
+        for section in required_sections:
+            if section in text.lower():
+                found_sections += 1
+        
+        scores['section_completeness'] = (found_sections / len(required_sections)) * 100
+        
+        # Length appropriateness
+        word_count = len(text.split())
+        if 300 <= word_count <= 800:
+            scores['length_appropriateness'] = 100
+        elif 200 <= word_count < 300 or 800 < word_count <= 1200:
+            scores['length_appropriateness'] = 80
+        else:
+            scores['length_appropriateness'] = 60
+        
+        # Formatting score (basic checks)
+        formatting_score = 0
+        if '\n' in text:  # Has line breaks
+            formatting_score += 30
+        if '•' in text or '-' in text:  # Has bullet points
+            formatting_score += 30
+        if any(year in text for year in ['2020', '2021', '2022', '2023', '2024']):  # Has dates
+            formatting_score += 40
+        
+        scores['formatting'] = min(formatting_score, 100)
+        
+        # Readability score
+        sentences = len([s for s in text.split('.') if s.strip()])
+        avg_sentence_length = word_count / max(sentences, 1)
+        
+        if 10 <= avg_sentence_length <= 20:
+            scores['readability'] = 100
+        elif 8 <= avg_sentence_length < 10 or 20 < avg_sentence_length <= 25:
+            scores['readability'] = 80
+        else:
+            scores['readability'] = 60
+        
+        return scores
+    
+    def _generate_rule_based_feedback(self, text: str, job_role: str) -> Tuple[OverallFeedback, Dict[str, float]]:
+        keywords = self._get_role_keywords(job_role)
+        keyword_score, missing_keywords = self._calculate_keyword_score(text, keywords)
+        structure_scores = self._analyze_structure(text)
+        
+        # Calculate overall score
+        overall_score = (
+            keyword_score * 0.4 +
+            structure_scores['section_completeness'] * 0.2 +
+            structure_scores['formatting'] * 0.15 +
+            structure_scores['readability'] * 0.15 +
+            structure_scores['length_appropriateness'] * 0.1
+        )
+        
+        # Generate strengths
+        strengths = []
+        if keyword_score >= 70:
+            strengths.append("Strong keyword alignment with target role")
+        if structure_scores['section_completeness'] >= 75:
+            strengths.append("Well-structured resume with all essential sections")
+        if structure_scores['formatting'] >= 80:
+            strengths.append("Good formatting with clear organization")
+        if structure_scores['readability'] >= 80:
+            strengths.append("Clear and readable content structure")
+        if structure_scores['length_appropriateness'] >= 80:
+            strengths.append("Appropriate resume length for ATS scanning")
+        
+        # Generate weaknesses
+        weaknesses = []
+        if keyword_score < 50:
+            weaknesses.append("Missing key industry-specific keywords")
+        if structure_scores['section_completeness'] < 75:
+            weaknesses.append("Missing important resume sections")
+        if structure_scores['formatting'] < 60:
+            weaknesses.append("Formatting could be improved for better ATS compatibility")
+        if structure_scores['readability'] < 60:
+            weaknesses.append("Content readability needs improvement")
+        if len(text.split()) < 200:
+            weaknesses.append("Resume might be too brief - consider adding more details")
+        
+        # Generate recommendations
+        recommendations = []
+        if missing_keywords:
+            recommendations.append(f"Add these relevant keywords: {', '.join(missing_keywords[:5])}")
+        if keyword_score < 60:
+            recommendations.append("Include more role-specific technical terms and skills")
+        if structure_scores['formatting'] < 70:
+            recommendations.append("Use bullet points and consistent formatting")
+        if '•' not in text and '-' not in text:
+            recommendations.append("Use bullet points to highlight achievements")
+        if not any(num in text for num in ['%','+']):
+            recommendations.append("Quantify achievements with numbers and percentages")
+        
+        # Ensure we have at least some content
+        if not strengths:
+            strengths.append("Resume contains relevant professional experience")
+        if not weaknesses:
+            weaknesses.append("Consider optimizing for specific job requirements")
+        if not recommendations:
+            recommendations.append("Tailor content to match job description keywords")
+        
+        overall_feedback = OverallFeedback(
+            strengths=strengths[:5],
+            weaknesses=weaknesses[:5], 
+            recommendations=recommendations[:5],
+            overall_score=overall_score
+        )
+        
+        component_scores = {
+            'keyword_match': keyword_score,
+            'formatting': structure_scores['formatting'],
+            'section_completeness': structure_scores['section_completeness'],
+            'readability': structure_scores['readability'],
+            'length_appropriateness': structure_scores['length_appropriateness']
+        }
+        
+        return overall_feedback, component_scores
+    
+    def analyze_overall(self, resume_text: str, job_role: str) -> OverallFeedback:
+        """Perform overall resume analysis with caching"""
+        cache_key = f"overall_{hash(resume_text[:500])}_{job_role}"
+        
+        with self._lock:
+            if cache_key in self._cache:
+                return self._cache[cache_key]
+        
+        # Use rule-based analysis for speed
+        overall_feedback, _ = self._generate_rule_based_feedback(resume_text, job_role)
+        
+        with self._lock:
+            self._cache[cache_key] = overall_feedback
+        
+        return overall_feedback
+    
+    def analyze_section(self, resume_text: str, job_role: str, section: str) -> SectionFeedback:
+        """Analyze a specific section with rule-based approach"""
+        cache_key = f"section_{hash(resume_text[:300])}_{job_role}_{section}"
+        
+        with self._lock:
+            if cache_key in self._cache:
+                return self._cache[cache_key]
+        
+        # Extract section content
+        section_content = self._extract_section_content(resume_text, section)
+        
+        # Generate section-specific feedback
+        keywords = self._get_role_keywords(job_role)
+        keyword_score, missing_keywords = self._calculate_keyword_score(section_content, keywords)
+        
+        # Section-specific scoring
+        if section.lower() in ['experience', 'work']:
+            score = self._score_experience_section(section_content)
+            feedback = self._get_experience_feedback(section_content)
+            suggestions = self._get_experience_suggestions(section_content)
+        elif section.lower() in ['skills', 'technical']:
+            score = self._score_skills_section(section_content, keywords)
+            feedback = self._get_skills_feedback(section_content)
+            suggestions = self._get_skills_suggestions(section_content, job_role)
+        elif section.lower() in ['education', 'academic']:
+            score = self._score_education_section(section_content)
+            feedback = self._get_education_feedback(section_content)
+            suggestions = self._get_education_suggestions(section_content)
+        else:
+            score = keyword_score
+            feedback = f"Section contains relevant content for {job_role} role"
+            suggestions = ["Add more specific details", "Include relevant keywords"]
+        
+        section_feedback = SectionFeedback(
+            section=section,
+            score=score,
+            feedback=feedback,
+            suggestions=suggestions[:3],
+            missing_keywords=missing_keywords[:5]
+        )
+        
+        with self._lock:
+            self._cache[cache_key] = section_feedback
+        
+        return section_feedback
+    
+    def _extract_section_content(self, text: str, section: str) -> str:
+        """Extract content for a specific section"""
+        lines = text.split('\n')
+        section_content = []
         in_section = False
         
+        section_keywords = [section.lower(), section.lower().replace('_', ' ')]
+        
         for line in lines:
-            if section.lower() in line.lower() and len(line.strip()) < 50:
+            line_lower = line.lower().strip()
+            
+            # Check if we're entering the target section
+            if any(keyword in line_lower for keyword in section_keywords) and len(line.strip()) < 50:
                 in_section = True
                 continue
-            elif in_section and any(keyword in line.lower() for keyword in ['experience', 'education', 'skills', 'projects']):
-                break
-            elif in_section:
-                section_text.append(line)
+            
+            # Check if we're entering a different section
+            if in_section and any(sec in line_lower for sec in ['experience', 'education', 'skills', 'projects', 'summary']) and len(line.strip()) < 50:
+                if not any(keyword in line_lower for keyword in section_keywords):
+                    break
+            
+            if in_section and line.strip():
+                section_content.append(line)
         
-        return '\n'.join(section_text)
+        return '\n'.join(section_content)
+    
+    def _score_experience_section(self, content: str) -> float:
+        """Score experience section"""
+        score = 0
+        
+        # Check for dates
+        if any(year in content for year in ['2020', '2021', '2022', '2023', '2024']):
+            score += 25
+        
+        # Check for bullet points
+        if '•' in content or '-' in content:
+            score += 25
+        
+        # Check for quantified achievements
+        if any(indicator in content for indicator in ['%', '+', 'increased', 'improved' , 'reduced']):
+            score += 30
+        
+        # Check for action verbs
+        action_verbs = ['led', 'managed', 'developed', 'implemented', 'created', 'designed', 'achieved']
+        found_verbs = sum(1 for verb in action_verbs if verb in content.lower())
+        score += min(found_verbs * 4, 20)
+        
+        return min(score, 100)
+    
+    def _score_skills_section(self, content: str, keywords: List[str]) -> float:
+        """Score skills section"""
+        if not content.strip():
+            return 0
+        
+        # Count skills
+        skills = [s.strip() for s in content.replace('\n', ',').split(',') if s.strip()]
+        skill_count = len(skills)
+        
+        # Optimal range: 8-15 skills
+        if 8 <= skill_count <= 15:
+            count_score = 40
+        elif 5 <= skill_count < 8 or 15 < skill_count <= 20:
+            count_score = 30
+        else:
+            count_score = 20
+        
+        # Keyword relevance
+        keyword_score, _ = self._calculate_keyword_score(content, keywords)
+        
+        return min(count_score + (keyword_score * 0.6), 100)
+    
+    def _score_education_section(self, content: str) -> float:
+        """Score education section"""
+        score = 0
+        
+        # Check for degree
+        if any(degree in content.lower() for degree in ['bachelor', 'master', 'phd', 'degree']):
+            score += 40
+        
+        # Check for institution
+        if any(word in content.lower() for word in ['university', 'college', 'institute']):
+            score += 30
+        
+        # Check for date
+        if any(year in content for year in ['2020', '2021', '2022', '2023', '2024', '2019', '2018']):
+            score += 30
+        
+        return min(score, 100)
+    
+    def _get_experience_feedback(self, content: str) -> str:
+        """Get feedback for experience section"""
+        if not any(indicator in content for indicator in ['%', 'increased', 'improved']):
+            return "Add quantified achievements with specific metrics and numbers"
+        elif not ('•' in content or '-' in content):
+            return "Use bullet points to better organize accomplishments"
+        else:
+            return "Experience section shows good structure with quantified achievements"
+    
+    def _get_skills_feedback(self, content: str) -> str:
+        """Get feedback for skills section"""
+        skills = [s.strip() for s in content.replace('\n', ',').split(',') if s.strip()]
+        skill_count = len(skills)
+        
+        if skill_count < 5:
+            return "Add more relevant skills to strengthen your profile"
+        elif skill_count > 20:
+            return "Consider reducing to most relevant skills for better focus"
+        else:
+            return "Good variety of skills listed, well-organized"
+    
+    def _get_education_feedback(self, content: str) -> str:
+        """Get feedback for education section"""
+        if not any(degree in content.lower() for degree in ['bachelor', 'master', 'phd']):
+            return "Include your degree type and major field of study"
+        else:
+            return "Education section contains essential information"
+    
+    def _get_experience_suggestions(self, content: str) -> List[str]:
+        """Get suggestions for experience section"""
+        suggestions = []
+        
+        if not any(indicator in content for indicator in ['%','increased']):
+            suggestions.append("Add specific metrics and percentages to quantify achievements")
+        
+        if not ('•' in content or '-' in content):
+            suggestions.append("Use bullet points to organize accomplishments clearly")
+        
+        action_verbs = ['led', 'managed', 'developed', 'implemented', 'created']
+        if not any(verb in content.lower() for verb in action_verbs):
+            suggestions.append("Start bullet points with strong action verbs")
+        
+        if not any(year in content for year in ['2020', '2021', '2022', '2023']):
+            suggestions.append("Include employment dates for each position")
+        
+        return suggestions
+    
+    def _get_skills_suggestions(self, content: str, job_role: str) -> List[str]:
+        """Get suggestions for skills section"""
+        suggestions = []
+        
+        skills = [s.strip() for s in content.replace('\n', ',').split(',') if s.strip()]
+        
+        if len(skills) < 8:
+            suggestions.append("Add more relevant technical and soft skills")
+        
+        if job_role.lower() in ['software engineer', 'data scientist']:
+            if not any(tech in content.lower() for tech in ['python', 'java', 'javascript']):
+                suggestions.append("Include relevant programming languages")
+        
+        suggestions.append("Consider grouping skills by category (Technical, Tools, Languages)")
+        
+        return suggestions
+    
+    def _get_education_suggestions(self, content: str) -> List[str]:
+        """Get suggestions for education section"""
+        suggestions = []
+        
+        if not any(degree in content.lower() for degree in ['bachelor', 'master']):
+            suggestions.append("Include your degree type and field of study")
+        
+        if not any(year in content for year in ['2020', '2021', '2022', '2023', '2024']):
+            suggestions.append("Add graduation year")
+        
+        suggestions.append("Consider adding relevant coursework or academic projects")
+        
+        return suggestions
+    
+    def optimize_resume(self, resume_text: str, job_role: str) -> str:
+        """Generate optimized resume using rule-based improvements"""
+        # For speed, return enhanced version with basic improvements
+        lines = resume_text.split('\n')
+        optimized_lines = []
+        
+        keywords = self._get_role_keywords(job_role)
+        
+        for line in lines:
+            if line.strip():
+                # Enhance bullet points
+                if line.strip().startswith(('-', '*')):
+                    line = line.replace('-', '•').replace('*', '•')
+                
+                # Add keywords where appropriate (simple version)
+                optimized_lines.append(line)
+            else:
+                optimized_lines.append(line)
+        
+        # Add missing keywords section if significantly missing
+        keyword_score, missing = self._calculate_keyword_score(resume_text, keywords)
+        
+        if keyword_score < 40 and missing:
+            optimized_lines.append("\n📝 SUGGESTED ADDITIONS:")
+            optimized_lines.append(f"Consider adding these keywords: {', '.join(missing[:5])}")
+        
+        return '\n'.join(optimized_lines)
 
-# Example usage
+# Example usage and testing
 if __name__ == "__main__":
-    analyzer = HuggingFaceAnalyzer()
+    analyzer = OptimizedHuggingFaceAnalyzer()
     
     sample_resume = """
-    John Doe
-    john.doe@email.com | (555) 123-4567
+    Raghav maheshwari
+    abc@email.com | 999-123-4537
     
     SUMMARY
     Experienced software engineer with 5+ years in full-stack development.
     
     EXPERIENCE
-    Senior Software Engineer | Tech Corp | 2020-2023
+    Senior Software Engineer | medice | 2020-2023
     • Developed web applications using Python and React
     • Led team of 3 developers
     
     EDUCATION
-    Bachelor of Computer Science | University of Tech | 2018
+    Bachelor of Computer Science | ABES Engineering college | 2024
     
     SKILLS
     Python, JavaScript, React, SQL, AWS
     """
     
     # Test overall analysis
+    start_time = time.time()
     overall = analyzer.analyze_overall(sample_resume, "software_engineer")
-    print(f"Overall Score: {overall.overall_score}")
+    print(f"Overall analysis completed in {time.time() - start_time:.2f} seconds")
+    print(f"Overall Score: {overall.overall_score:.1f}")
     print(f"Strengths: {overall.strengths}")
+    print(f"Recommendations: {overall.recommendations}")
     
-    # Test section analysis
+    # Test section analysis  
+    start_time = time.time()
     section = analyzer.analyze_section(sample_resume, "software_engineer", "skills")
-    print(f"Skills Score: {section.score}")
+    print(f"Section analysis completed in {time.time() - start_time:.2f} seconds")
+    print(f"Skills Score: {section.score:.1f}")
     print(f"Suggestions: {section.suggestions}")

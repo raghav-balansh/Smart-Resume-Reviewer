@@ -1,8 +1,12 @@
-from typing import Dict, List, Optional, Tuple
+from typing import Dict, List
 from dataclasses import dataclass
 import re
-from hf_analyzer import HuggingFaceAnalyzer, SectionFeedback, OverallFeedback
-from resume_processor import ResumeProcessor, ATSAnalysis
+import time
+from functools import lru_cache
+
+# Import our optimized components
+from hf_analyzer import OptimizedHuggingFaceAnalyzer, SectionFeedback, OverallFeedback
+from resume_processor import OptimizedResumeProcessor, ATSAnalysis
 
 @dataclass
 class SectionAnalysis:
@@ -21,529 +25,576 @@ class ComprehensiveFeedback:
     ats_analysis: ATSAnalysis
     priority_improvements: List[str]
     estimated_improvement: float
+    processing_time: float
 
-class SectionWiseFeedbackGenerator:
-    #Generate detailed section-wise feedback for resumes
+class OptimizedFeedbackGenerator:
+    """Optimized feedback generator focused on speed and practical insights"""
     
-    def __init__(self, hf_analyzer: HuggingFaceAnalyzer = None):
-        self.hf_analyzer = hf_analyzer or HuggingFaceAnalyzer()
-        self.resume_processor = ResumeProcessor()
+    def __init__(self, hf_analyzer: OptimizedHuggingFaceAnalyzer = None):
+        self.hf_analyzer = hf_analyzer or OptimizedHuggingFaceAnalyzer()
+        self.resume_processor = OptimizedResumeProcessor()
         
-        # Section-specific improvement guidelines
-        self.section_guidelines = {
+        # Pre-defined feedback templates for common scenarios (for speed)
+        self.feedback_templates = {
+            'high_score': {
+                'strengths': [
+                    "Strong alignment with target role requirements",
+                    "Well-structured resume with clear sections",
+                    "Good use of quantified achievements",
+                    "Professional formatting and presentation",
+                    "Comprehensive skill set listed"
+                ],
+                'recommendations': [
+                    "Continue to tailor keywords for specific job applications",
+                    "Keep quantified achievements prominent",
+                    "Maintain consistent formatting across all sections"
+                ]
+            },
+            'medium_score': {
+                'weaknesses': [
+                    "Could benefit from more role-specific keywords",
+                    "Some sections need more detailed information",
+                    "Consider adding quantified achievements"
+                ],
+                'recommendations': [
+                    "Add more specific metrics and numbers to achievements",
+                    "Include additional relevant technical skills",
+                    "Enhance job descriptions with stronger action verbs"
+                ]
+            },
+            'low_score': {
+                'weaknesses': [
+                    "Missing key industry-specific keywords",
+                    "Lacks quantified achievements and metrics",
+                    "Resume structure could be improved",
+                    "Some essential sections may be missing"
+                ],
+                'recommendations': [
+                    "Add specific numbers and percentages to showcase impact",
+                    "Include more relevant technical skills and keywords",
+                    "Reorganize content with clear section headers",
+                    "Use bullet points for better readability"
+                ]
+            }
+        }
+        
+        # Section-specific quick analysis rules
+        self.section_rules = {
             'summary': {
-                'keywords': ['experienced', 'skilled', 'passionate', 'results-driven', 'innovative'],
-                'length_range': (2, 6), 
-                'focus_areas': ['value proposition', 'key skills', 'career highlights']
+                'ideal_length': (50, 150),  # words
+                'must_have': ['experience', 'skills'],
+                'scoring_factors': ['length', 'keywords', 'career_focus']
             },
             'experience': {
-                'keywords': ['achieved', 'increased', 'improved', 'developed', 'led', 'managed'],
-                'focus_areas': ['quantified achievements', 'action verbs', 'relevant technologies'],
-                'structure': ['job title', 'company', 'dates', 'bullet points']
+                'must_have': ['dates', 'company', 'achievements'],
+                'bonus_points': ['metrics', 'action_verbs', 'technologies'],
+                'scoring_factors': ['quantification', 'relevance', 'recency']
             },
             'skills': {
-                'categories': ['technical', 'soft', 'tools', 'languages'],
-                'focus_areas': ['relevance to role', 'proficiency levels', 'recent technologies']
+                'ideal_count': (8, 15),
+                'categories': ['technical', 'tools', 'languages', 'frameworks'],
+                'scoring_factors': ['relevance', 'breadth', 'organization']
             },
             'education': {
-                'focus_areas': ['degree relevance', 'graduation date', 'academic achievements'],
-                'structure': ['degree', 'institution', 'date', 'gpa (if high)']
+                'must_have': ['degree', 'institution'],
+                'bonus_points': ['gpa', 'honors', 'relevant_coursework'],
+                'scoring_factors': ['relevance', 'recency', 'completeness']
             },
             'projects': {
-                'keywords': ['built', 'developed', 'implemented', 'designed', 'created'],
-                'focus_areas': ['problem solved', 'technologies used', 'impact/results'],
-                'structure': ['project name', 'description', 'technologies', 'outcome']
+                'must_have': ['description', 'technologies'],
+                'bonus_points': ['outcomes', 'links', 'impact'],
+                'scoring_factors': ['relevance', 'complexity', 'results']
             }
         }
     
     def generate_comprehensive_feedback(self, resume_text: str, job_role: str, job_description: str = "") -> ComprehensiveFeedback:
-        """Generate comprehensive section-wise feedback"""
+        """Generate comprehensive feedback optimized for speed"""
+        start_time = time.time()
         
-        # Get overall feedback from HF analyzer
-        overall_feedback = self.hf_analyzer.analyze_overall(resume_text, job_role)
-        
-        # Get ATS analysis
+        # Step 1: Quick ATS analysis (most important)
         ats_analysis = self.resume_processor.comprehensive_ats_analysis(resume_text, job_role, job_description)
         
-        # Extract sections
+        # Step 2: Generate overall feedback based on score
+        overall_feedback = self._generate_quick_overall_feedback(ats_analysis, resume_text, job_role)
+        
+        # Step 3: Section-wise analysis (optimized)
         sections = self.resume_processor.extract_sections(resume_text)
+        section_analyses = self._generate_quick_section_analyses(sections, job_role, ats_analysis)
         
-        # Generate section-wise analysis
-        section_analyses = []
-        for section_name, section_content in sections.items():
-            if section_content.strip():
-                section_analysis = self._analyze_section(section_name, section_content, job_role, resume_text)
-                section_analyses.append(section_analysis)
+        # Step 4: Priority improvements
+        priority_improvements = self._generate_priority_improvements(ats_analysis, section_analyses)
         
-        # Generate priority improvements
-        priority_improvements = self._generate_priority_improvements(section_analyses, ats_analysis)
+        # Step 5: Estimate improvement potential
+        estimated_improvement = self._estimate_improvement_potential(ats_analysis)
         
-        # Estimate improvement potential
-        estimated_improvement = self._estimate_improvement_potential(section_analyses, ats_analysis)
+        processing_time = time.time() - start_time
         
         return ComprehensiveFeedback(
             overall_feedback=overall_feedback,
             section_analyses=section_analyses,
             ats_analysis=ats_analysis,
             priority_improvements=priority_improvements,
-            estimated_improvement=estimated_improvement
+            estimated_improvement=estimated_improvement,
+            processing_time=processing_time
         )
     
-    def _analyze_section(self, section_name: str, section_content: str, job_role: str, full_resume: str) -> SectionAnalysis:
-        """Analyze a specific section in detail"""
+    def _generate_quick_overall_feedback(self, ats_analysis: ATSAnalysis, resume_text: str, job_role: str) -> OverallFeedback:
+        """Generate overall feedback quickly using templates and rules"""
         
-        # Get HF model feedback for this section
-        hf_feedback = self.hf_analyzer.analyze_section(full_resume, job_role, section_name)
+        score = ats_analysis.total_score
         
-        # Calculate section-specific metrics
-        score = self._calculate_section_score(section_name, section_content, job_role)
+        # Determine feedback category based on score
+        if score >= 75:
+            category = 'high_score'
+        elif score >= 50:
+            category = 'medium_score'
+        else:
+            category = 'low_score'
         
-        # Generate specific feedback
-        feedback = self._generate_section_feedback(section_name, section_content, job_role, hf_feedback)
+        # Start with template feedback
+        template = self.feedback_templates[category]
+        
+        strengths = template.get('strengths', []).copy()
+        weaknesses = template.get('weaknesses', []).copy()
+        recommendations = template.get('recommendations', []).copy()
+        
+        # Add specific feedback based on component scores
+        components = ats_analysis.component_scores
+        
+        # Keyword-specific feedback
+        if components['keyword_match'] < 50:
+            weaknesses.append(f"Low keyword match for {job_role} role")
+            recommendations.append("Research job descriptions to identify key terms for your field")
+        elif components['keyword_match'] >= 80:
+            strengths.append("Excellent keyword alignment with target role")
+        
+        # Formatting-specific feedback
+        if components['formatting'] < 60:
+            weaknesses.append("Resume formatting needs improvement for ATS compatibility")
+            recommendations.append("Use consistent bullet points and clear section headers")
+        elif components['formatting'] >= 85:
+            strengths.append("Professional formatting optimized for ATS systems")
+        
+        # Section completeness feedback
+        if components['section_completeness'] < 70:
+            weaknesses.append("Missing some important resume sections")
+            recommendations.append("Ensure all essential sections are present and complete")
+        
+        # Readability feedback
+        if components['readability'] < 70:
+            weaknesses.append("Content readability could be enhanced")
+            recommendations.append("Use shorter sentences and clearer language")
+        
+        # Add specific improvements from ATS analysis
+        recommendations.extend(ats_analysis.recommendations[:2])  # Add top 2 ATS recommendations
+        
+        return OverallFeedback(
+            strengths=strengths[:5],  # Limit to top 5
+            weaknesses=weaknesses[:5],  # Limit to top 5
+            recommendations=recommendations[:5],  # Limit to top 5
+            overall_score=score
+        )
+    
+    def _generate_quick_section_analyses(self, sections: Dict[str, str], job_role: str, ats_analysis: ATSAnalysis) -> List[SectionAnalysis]:
+        """Generate section analyses quickly using rule-based approach"""
+        
+        section_analyses = []
+        keywords = self.resume_processor.get_role_keywords(job_role)
+        
+        # Prioritize most important sections for analysis
+        priority_sections = ['experience', 'skills', 'summary', 'education', 'projects']
+        
+        for section_name in priority_sections:
+            if section_name in sections and sections[section_name].strip():
+                section_content = sections[section_name]
+                analysis = self._analyze_section_quickly(section_name, section_content, tuple(keywords), job_role)
+                section_analyses.append(analysis)
+                
+                # Limit to 4 sections for performance
+                if len(section_analyses) >= 4:
+                    break
+        
+        return section_analyses
+    
+    @lru_cache(maxsize=50)
+    def _analyze_section_quickly(self, section_name: str, content: str, keywords: tuple, job_role: str) -> SectionAnalysis:
+        """Quick section analysis using cached results"""
+        
+        keywords = list(keywords)  # Convert back from tuple for caching
+        
+        # Calculate basic score
+        score = self._calculate_section_score_fast(section_name, content, keywords)
+        
+        # Generate feedback
+        feedback = self._generate_section_feedback_fast(section_name, content, score)
         
         # Generate suggestions
-        suggestions = self._generate_section_suggestions(section_name, section_content, job_role)
+        suggestions = self._generate_section_suggestions_fast(section_name, content)
         
         # Find missing keywords
-        missing_keywords = self._find_missing_keywords(section_name, section_content, job_role)
+        content_lower = content.lower()
+        missing_keywords = [kw for kw in keywords[:10] if kw.lower() not in content_lower]
         
         # Generate improvements
-        improvements = self._generate_improvements(section_name, section_content, job_role)
+        improvements = self._generate_section_improvements_fast(section_name, score)
         
         return SectionAnalysis(
             section_name=section_name,
-            content=section_content,
+            content=content[:200] + "..." if len(content) > 200 else content,  # Truncate for memory
             score=score,
             feedback=feedback,
-            suggestions=suggestions,
-            missing_keywords=missing_keywords,
-            improvements=improvements
+            suggestions=suggestions[:3],  # Limit suggestions
+            missing_keywords=missing_keywords[:5],  # Limit keywords
+            improvements=improvements[:3]  # Limit improvements
         )
     
-    def _calculate_section_score(self, section_name: str, content: str, job_role: str) -> float:
-        """Calculate score for a specific section"""
-        score = 0.0
+    def _calculate_section_score_fast(self, section_name: str, content: str, keywords: List[str]) -> float:
+        """Fast section scoring using simple rules"""
         
-        if section_name == 'summary':
-            score = self._score_summary(content, job_role)
-        elif section_name in ['experience', 'work history', 'employment']:
-            score = self._score_experience(content, job_role)
-        elif section_name in ['skills', 'technical skills', 'competencies']:
-            score = self._score_skills(content, job_role)
-        elif section_name in ['education', 'academic', 'qualifications']:
-            score = self._score_education(content, job_role)
-        elif section_name in ['projects', 'portfolio', 'key projects']:
-            score = self._score_projects(content, job_role)
+        if section_name == 'experience':
+            return self._score_experience_fast(content)
+        elif section_name == 'skills':
+            return self._score_skills_fast(content, keywords)
+        elif section_name == 'summary':
+            return self._score_summary_fast(content, keywords)
+        elif section_name == 'education':
+            return self._score_education_fast(content)
+        elif section_name == 'projects':
+            return self._score_projects_fast(content, keywords)
         else:
-            score = self._score_generic_section(content, job_role)
-        
-        return min(score, 100.0)
+            # Generic scoring
+            return self._score_generic_section_fast(content, keywords)
     
-    def _score_summary(self, content: str, job_role: str) -> float:
-        """Score the summary/objective section"""
-        score = 0.0
+    def _score_experience_fast(self, content: str) -> float:
+        """Fast experience section scoring"""
+        score = 0
         
-        # Length check (2-4 sentences ideal)
-        sentences = re.split(r'[.!?]+', content)
-        sentence_count = len([s for s in sentences if s.strip()])
-        if 2 <= sentence_count <= 4:
-            score += 30
-        elif sentence_count == 1 or sentence_count == 5:
-            score += 20
-        else:
-            score += 10
-        
-        # Keyword presence
-        keywords = self.section_guidelines['summary']['keywords']
-        found_keywords = sum(1 for kw in keywords if kw.lower() in content.lower())
-        score += min(found_keywords * 10, 30)
-        
-        # Value proposition check
-        value_words = ['experienced', 'skilled', 'expertise', 'specialized', 'proven']
-        if any(word in content.lower() for word in value_words):
-            score += 20
-        
-        # Career highlights
-        highlight_words = ['years', 'experience', 'successful', 'achieved', 'led']
-        if any(word in content.lower() for word in highlight_words):
-            score += 20
-        
-        return score
-    
-    def _score_experience(self, content: str, job_role: str) -> float:
-        """Score the experience section"""
-        score = 0.0
-        
-        # Check for quantified achievements
-        numbers = re.findall(r'\b\d+%|\b\d+\+|\b\d+[km]|\$\d+', content.lower())
-        if numbers:
+        # Dates (25 points)
+        if re.search(r'\b20\d{2}\b', content):
             score += 25
         
-        # Action verbs
-        action_verbs = self.section_guidelines['experience']['keywords']
-        found_verbs = sum(1 for verb in action_verbs if verb.lower() in content.lower())
-        score += min(found_verbs * 5, 25)
-        
-        # Job structure (title, company, dates)
-        if '|' in content or any(year in content for year in ['2020', '2021', '2022', '2023', '2024']):
+        # Bullet points (20 points)
+        if re.search(r'[•\-\*]', content):
             score += 20
         
-        # Bullet points
-        bullet_count = len(re.findall(r'[•\-\*]', content))
-        if bullet_count >= 3:
-            score += 15
-        elif bullet_count >= 1:
-            score += 10
+        # Quantified achievements (35 points)
+        if re.search(r'\d+%|\d+\+|\$\d+|increased|improved|reduced', content.lower()):
+            score += 35
         
-        # Technology relevance
-        tech_keywords = self.resume_processor.role_keywords.get(job_role.lower().replace(' ', '_'), [])
-        found_tech = sum(1 for tech in tech_keywords if tech.lower() in content.lower())
-        score += min(found_tech * 3, 15)
+        # Action verbs (20 points)
+        action_verbs = ['led', 'managed', 'developed', 'created', 'implemented']
+        found_verbs = sum(1 for verb in action_verbs if verb in content.lower())
+        score += min(found_verbs * 5, 20)
         
-        return score
+        return min(score, 100)
     
-    def _score_skills(self, content: str, job_role: str) -> float:
-        """Score the skills section"""
-        score = 0.0
-        
-        # Skill count (10-20 skills ideal)
+    def _score_skills_fast(self, content: str, keywords: List[str]) -> float:
+        """Fast skills section scoring"""
+        # Count skills
         skills = [s.strip() for s in re.split(r'[,;\n]', content) if s.strip()]
         skill_count = len(skills)
-        if 10 <= skill_count <= 20:
-            score += 30
-        elif 5 <= skill_count < 10 or 20 < skill_count <= 30:
-            score += 20
+        
+        # Skill count score (40 points)
+        if 8 <= skill_count <= 15:
+            count_score = 40
+        elif 5 <= skill_count <= 20:
+            count_score = 30
         else:
-            score += 10
+            count_score = 20
         
-        # Technology relevance
-        tech_keywords = self.resume_processor.role_keywords.get(job_role.lower().replace(' ', '_'), [])
-        found_tech = sum(1 for tech in tech_keywords if tech.lower() in content.lower())
-        score += min(found_tech * 5, 40)
+        # Keyword relevance (60 points)
+        content_lower = content.lower()
+        keyword_matches = sum(1 for kw in keywords if kw.lower() in content_lower)
+        keyword_score = min((keyword_matches / max(len(keywords), 1)) * 60, 60)
         
-        # Skill categorization
-        categories = ['programming', 'tools', 'frameworks', 'databases', 'cloud']
-        found_categories = sum(1 for cat in categories if any(skill.lower() in content.lower() for skill in [cat]))
-        score += found_categories * 6
-        
-        return score
+        return min(count_score + keyword_score, 100)
     
-    def _score_education(self, content: str, job_role: str) -> float:
-        """Score the education section"""
-        score = 0.0
-        
-        # Degree presence
-        degrees = ['bachelor', 'master', 'phd', 'associate', 'certificate']
-        if any(degree in content.lower() for degree in degrees):
-            score += 30
-        
-        # Institution name
-        if any(word in content.lower() for word in ['university', 'college', 'institute', 'school']):
-            score += 20
-        
-        # Graduation date
-        if any(year in content for year in ['2020', '2021', '2022', '2023', '2024', '2019', '2018']):
-            score += 20
-        
-        # GPA (if mentioned and good)
-        gpa_match = re.search(r'gpa[:\s]*(\d+\.?\d*)', content.lower())
-        if gpa_match:
-            gpa = float(gpa_match.group(1))
-            if gpa >= 3.5:
-                score += 15
-            elif gpa >= 3.0:
-                score += 10
-        
-        # Academic achievements
-        if any(word in content.lower() for word in ['honors', 'dean', 'magna', 'summa', 'cum laude']):
-            score += 15
-        
-        return score
-    
-    def _score_projects(self, content: str, job_role: str) -> float:
-        """Score the projects section"""
-        score = 0.0
-        
-        # Project count (2-4 projects ideal)
-        project_indicators = re.findall(r'project|built|developed|created|designed', content.lower())
-        if 2 <= len(project_indicators) <= 4:
-            score += 25
-        elif len(project_indicators) >= 1:
-            score += 15
-        
-        # Technology usage
-        tech_keywords = self.resume_processor.role_keywords.get(job_role.lower().replace(' ', '_'), [])
-        found_tech = sum(1 for tech in tech_keywords if tech.lower() in content.lower())
-        score += min(found_tech * 5, 30)
-        
-        # Impact/results
-        impact_words = ['improved', 'increased', 'reduced', 'saved', 'achieved', 'resulted']
-        if any(word in content.lower() for word in impact_words):
-            score += 20
-        
-        # Project descriptions
-        if len(content.split('\n')) >= 3:
-            score += 15
-        
-        # Links/repositories
-        if any(link in content.lower() for link in ['github', 'demo', 'link', 'url']):
-            score += 10
-        
-        return score
-    
-    def _score_generic_section(self, content: str, job_role: str) -> float:
-        """Score generic sections"""
-        score = 0.0
-        
-        # Content length
+    def _score_summary_fast(self, content: str, keywords: List[str]) -> float:
+        """Fast summary section scoring"""
         word_count = len(content.split())
-        if 20 <= word_count <= 100:
-            score += 40
-        elif 10 <= word_count < 20 or 100 < word_count <= 200:
-            score += 30
+        
+        # Length score (40 points)
+        if 50 <= word_count <= 150:
+            length_score = 40
+        elif 30 <= word_count < 50 or 150 < word_count <= 200:
+            length_score = 30
         else:
+            length_score = 20
+        
+        # Keyword score (40 points)
+        content_lower = content.lower()
+        keyword_matches = sum(1 for kw in keywords[:10] if kw.lower() in content_lower)
+        keyword_score = min((keyword_matches / 10) * 40, 40)
+        
+        # Professional tone score (20 points)
+        professional_words = ['experienced', 'skilled', 'expertise', 'proven', 'successful']
+        tone_score = 20 if any(word in content_lower for word in professional_words) else 10
+        
+        return min(length_score + keyword_score + tone_score, 100)
+    
+    def _score_education_fast(self, content: str) -> float:
+        """Fast education section scoring"""
+        score = 0
+        
+        # Degree (50 points)
+        if any(degree in content.lower() for degree in ['bachelor', 'master', 'phd', 'degree']):
+            score += 50
+        
+        # Institution (30 points)
+        if any(word in content.lower() for word in ['university', 'college', 'institute']):
+            score += 30
+        
+        # Date (20 points)
+        if re.search(r'\b20\d{2}\b', content):
             score += 20
         
-        # Structure
-        if '\n' in content or '•' in content:
+        return min(score, 100)
+    
+    def _score_projects_fast(self, content: str, keywords: List[str]) -> float:
+        """Fast projects section scoring"""
+        score = 0
+        
+        # Project count (30 points)
+        project_count = content.lower().count('project') + len(re.findall(r'[•\-\*]', content))
+        score += min(project_count * 10, 30)
+        
+        # Technology keywords (40 points)
+        content_lower = content.lower()
+        tech_matches = sum(1 for kw in keywords if kw.lower() in content_lower)
+        score += min((tech_matches / max(len(keywords), 1)) * 40, 40)
+        
+        # Impact/results (30 points)
+        if any(word in content_lower for word in ['improved', 'increased', 'built', 'created']):
             score += 30
         
-        # Relevance
-        tech_keywords = self.resume_processor.role_keywords.get(job_role.lower().replace(' ', '_'), [])
-        found_tech = sum(1 for tech in tech_keywords if tech.lower() in content.lower())
-        score += min(found_tech * 5, 30)
-        
-        return score
+        return min(score, 100)
     
-    def _generate_section_feedback(self, section_name: str, content: str, job_role: str, hf_feedback: SectionFeedback) -> str:
-        """Generate detailed feedback for a section"""
-        feedback_parts = []
+    def _score_generic_section_fast(self, content: str, keywords: List[str]) -> float:
+        """Fast generic section scoring"""
+        if not content.strip():
+            return 0
         
-        # Use HF model feedback if available
-        if hf_feedback.feedback:
-            feedback_parts.append(hf_feedback.feedback)
+        # Basic presence score
+        score = 50
         
-        # Add specific section feedback
-        if section_name == 'summary':
-            feedback_parts.append(self._get_summary_feedback(content))
-        elif section_name in ['experience', 'work history', 'employment']:
-            feedback_parts.append(self._get_experience_feedback(content))
-        elif section_name in ['skills', 'technical skills', 'competencies']:
-            feedback_parts.append(self._get_skills_feedback(content, job_role))
-        elif section_name in ['education', 'academic', 'qualifications']:
-            feedback_parts.append(self._get_education_feedback(content))
-        elif section_name in ['projects', 'portfolio', 'key projects']:
-            feedback_parts.append(self._get_projects_feedback(content, job_role))
+        # Keyword relevance
+        content_lower = content.lower()
+        keyword_matches = sum(1 for kw in keywords[:5] if kw.lower() in content_lower)
+        score += min(keyword_matches * 10, 30)
         
-        return " ".join(feedback_parts) if feedback_parts else "Section content is present but could be enhanced."
+        # Structure score
+        if re.search(r'[•\-\*]', content):
+            score += 20
+        
+        return min(score, 100)
     
-    def _get_summary_feedback(self, content: str) -> str:
-        """Get specific feedback for summary section"""
-        sentences = re.split(r'[.!?]+', content)
-        sentence_count = len([s for s in sentences if s.strip()])
+    def _generate_section_feedback_fast(self, section_name: str, content: str, score: float) -> str:
+        """Generate quick feedback for sections"""
         
-        if sentence_count < 2:
-            return "Summary is too brief. Consider adding 1-2 more sentences to highlight your key strengths and career focus."
-        elif sentence_count > 4:
-            return "Summary is too long. Consider condensing to 2-3 impactful sentences that capture your value proposition."
+        if score >= 80:
+            return f"{section_name.title()} section is well-developed with strong content and good structure."
+        elif score >= 60:
+            return f"{section_name.title()} section has good foundation but could be enhanced with more specific details."
         else:
-            return "Summary length is appropriate. Good job highlighting your professional profile."
+            return f"{section_name.title()} section needs significant improvement to meet professional standards."
     
-    def _get_experience_feedback(self, content: str) -> str:
-        """Get specific feedback for experience section"""
-        feedback = []
+    def _generate_section_suggestions_fast(self, section_name: str, content: str) -> List[str]:
+        """Generate quick suggestions for sections"""
         
-        # Check for quantified achievements
-        numbers = re.findall(r'\b\d+%|\b\d+\+|\b\d+[km]|\$\d+', content.lower())
-        if not numbers:
-            feedback.append("Add quantified achievements (percentages, numbers, dollar amounts) to demonstrate impact.")
-        
-        # Check for action verbs
-        action_verbs = ['achieved', 'increased', 'improved', 'developed', 'led', 'managed']
-        found_verbs = sum(1 for verb in action_verbs if verb.lower() in content.lower())
-        if found_verbs < 3:
-            feedback.append("Use more strong action verbs to describe your accomplishments.")
-        
-        return " ".join(feedback) if feedback else "Experience section shows good structure and accomplishments."
-    
-    def _get_skills_feedback(self, content: str, job_role: str) -> str:
-        """Get specific feedback for skills section"""
-        skills = [s.strip() for s in re.split(r'[,;\n]', content) if s.strip()]
-        skill_count = len(skills)
-        
-        if skill_count < 10:
-            return "Consider adding more relevant skills to strengthen your profile."
-        elif skill_count > 25:
-            return "Skills list is quite long. Consider focusing on the most relevant and recent skills."
-        else:
-            return "Good variety of skills listed. Consider organizing them by category for better readability."
-    
-    def _get_education_feedback(self, content: str) -> str:
-        """Get specific feedback for education section"""
-        if not any(degree in content.lower() for degree in ['bachelor', 'master', 'phd', 'associate']):
-            return "Consider adding your degree information for better clarity."
-        
-        if not any(year in content for year in ['2020', '2021', '2022', '2023', '2024']):
-            return "Include graduation date to show recency of education."
-        
-        return "Education section is well-structured and informative."
-    
-    def _get_projects_feedback(self, content: str, job_role: str) -> str:
-        """Get specific feedback for projects section"""
-        if len(content.split('\n')) < 3:
-            return "Add more detail to your projects, including technologies used and outcomes achieved."
-        
-        if not any(word in content.lower() for word in ['built', 'developed', 'created', 'designed']):
-            return "Use action verbs to describe what you accomplished in each project."
-        
-        return "Projects section demonstrates practical experience and technical skills."
-    
-    def _generate_section_suggestions(self, section_name: str, content: str, job_role: str) -> List[str]:
-        """Generate specific suggestions for section improvement"""
         suggestions = []
         
-        if section_name == 'summary':
-            suggestions.extend([
-                "Start with your years of experience and primary expertise",
-                "Include 2-3 key skills relevant to the target role",
-                "End with your career objective or value proposition"
-            ])
-        elif section_name in ['experience', 'work history', 'employment']:
-            suggestions.extend([
-                "Use the STAR method (Situation, Task, Action, Result) for bullet points",
-                "Include specific metrics and quantifiable achievements",
-                "Start each bullet point with a strong action verb",
-                "Focus on accomplishments rather than job duties"
-            ])
-        elif section_name in ['skills', 'technical skills', 'competencies']:
-            suggestions.extend([
-                "Group skills by category (Programming, Tools, Frameworks, etc.)",
-                "Include proficiency levels for key skills",
-                "Add recent and trending technologies relevant to the role",
-                "Remove outdated or irrelevant skills"
-            ])
-        elif section_name in ['education', 'academic', 'qualifications']:
-            suggestions.extend([
-                "Include relevant coursework if recent graduate",
-                "Add academic achievements or honors if applicable",
-                "Include relevant certifications or training"
-            ])
-        elif section_name in ['projects', 'portfolio', 'key projects']:
-            suggestions.extend([
-                "Include project links or GitHub repositories",
-                "Describe the problem you solved and your approach",
-                "Highlight technologies used and your specific contributions",
-                "Include project outcomes and impact"
-            ])
+        if section_name == 'experience':
+            if not re.search(r'\d+%|\d+\+|\$\d+', content):
+                suggestions.append("Add quantified achievements with specific numbers")
+            if not re.search(r'[•\-\*]', content):
+                suggestions.append("Use bullet points to organize accomplishments")
+            suggestions.append("Start each point with a strong action verb")
         
-        return suggestions
-    
-    def _find_missing_keywords(self, section_name: str, content: str, job_role: str) -> List[str]:
-        """Find missing keywords for a specific section"""
-        role_keywords = self.resume_processor.role_keywords.get(job_role.lower().replace(' ', '_'), [])
-        content_lower = content.lower()
+        elif section_name == 'skills':
+            suggestions.append("Organize skills by category (Programming, Tools, etc.)")
+            suggestions.append("Include proficiency levels for key skills")
+            suggestions.append("Add trending technologies relevant to your field")
         
-        missing = [kw for kw in role_keywords if kw.lower() not in content_lower]
-        return missing[:5]  # Return top 5 missing keywords
+        elif section_name == 'summary':
+            suggestions.append("Include years of experience and key specializations")
+            suggestions.append("Highlight your unique value proposition")
+            suggestions.append("Keep it concise but impactful (2-3 sentences)")
+        
+        elif section_name == 'education':
+            suggestions.append("Include graduation date if recent")
+            suggestions.append("Add relevant coursework or academic projects")
+            suggestions.append("Include GPA if 3.5 or higher")
+        
+        elif section_name == 'projects':
+            suggestions.append("Include links to live projects or repositories")
+            suggestions.append("Describe technologies used and your role")
+            suggestions.append("Highlight measurable outcomes or impact")
+        
+        return suggestions[:3]
     
-    def _generate_improvements(self, section_name: str, content: str, job_role: str) -> List[str]:
-        """Generate specific improvement recommendations"""
+    def _generate_section_improvements_fast(self, section_name: str, score: float) -> List[str]:
+        """Generate quick improvements for sections"""
+        
         improvements = []
         
-        if section_name == 'summary':
-            improvements.extend([
-                "Add specific years of experience",
-                "Include key technologies or methodologies",
-                "Mention your unique value proposition"
-            ])
-        elif section_name in ['experience', 'work history', 'employment']:
-            improvements.extend([
-                "Quantify achievements with specific numbers",
-                "Use more powerful action verbs",
-                "Add context about company size or industry"
-            ])
-        elif section_name in ['skills', 'technical skills', 'competencies']:
-            improvements.extend([
-                "Organize skills by proficiency level",
-                "Add recent and trending technologies",
-                "Include soft skills relevant to the role"
-            ])
+        if score < 60:
+            improvements.append(f"Expand {section_name} section with more detailed information")
+            improvements.append(f"Add relevant keywords specific to your target role")
+            improvements.append(f"Improve formatting and structure for better readability")
+        elif score < 80:
+            improvements.append(f"Enhance {section_name} section with specific examples")
+            improvements.append(f"Add more quantified achievements where possible")
         
         return improvements
     
-    def _generate_priority_improvements(self, section_analyses: List[SectionAnalysis], ats_analysis: ATSAnalysis) -> List[str]:
-        """Generate priority improvements based on analysis"""
+    def _generate_priority_improvements(self, ats_analysis: ATSAnalysis, section_analyses: List[SectionAnalysis]) -> List[str]:
+        """Generate prioritized improvement recommendations"""
+        
         priorities = []
         
-        # Find lowest scoring sections
-        low_score_sections = [sa for sa in section_analyses if sa.score < 60]
-        if low_score_sections:
-            priorities.append(f"Focus on improving {', '.join([sa.section_name for sa in low_score_sections])} sections")
+        # ATS-based priorities
+        if ats_analysis.total_score < 60:
+            priorities.append("🚨 URGENT: Overall ATS score needs significant improvement")
         
-        # ATS-specific improvements
-        if ats_analysis.component_scores['keyword_match'] < 60:
-            priorities.append("Add more relevant keywords throughout the resume")
+        if ats_analysis.component_scores['keyword_match'] < 50:
+            priorities.append("🎯 HIGH: Add more role-specific keywords throughout resume")
         
         if ats_analysis.component_scores['formatting'] < 60:
-            priorities.append("Improve resume formatting and structure")
+            priorities.append("📝 HIGH: Improve formatting for better ATS compatibility")
         
+        # Section-based priorities
+        low_scoring_sections = [sa for sa in section_analyses if sa.score < 60]
+        if low_scoring_sections:
+            section_names = [sa.section_name for sa in low_scoring_sections]
+            priorities.append(f"📊 MEDIUM: Strengthen {', '.join(section_names)} sections")
+        
+        # Specific improvements
         if ats_analysis.missing_keywords:
-            priorities.append(f"Include missing keywords: {', '.join(ats_analysis.missing_keywords[:3])}")
+            priorities.append(f"🔍 MEDIUM: Include missing keywords: {', '.join(ats_analysis.missing_keywords[:3])}")
         
         return priorities[:5]  # Top 5 priorities
     
-    def _estimate_improvement_potential(self, section_analyses: List[SectionAnalysis], ats_analysis: ATSAnalysis) -> float:
+    def _estimate_improvement_potential(self, ats_analysis: ATSAnalysis) -> float:
         """Estimate potential score improvement"""
+        
         current_score = ats_analysis.total_score
         
-        # Calculate improvement potential based on section scores
+        # Calculate improvement potential based on current gaps
         improvement_potential = 0
-        for section in section_analyses:
-            if section.score < 70:
-                improvement_potential += (70 - section.score) * 0.3
         
-        # Add ATS improvement potential
+        # Keyword improvements
         if ats_analysis.component_scores['keyword_match'] < 70:
             improvement_potential += 15
         
+        # Formatting improvements
         if ats_analysis.component_scores['formatting'] < 70:
             improvement_potential += 10
         
+        # Section completeness improvements
+        if ats_analysis.component_scores['section_completeness'] < 80:
+            improvement_potential += 12
+        
+        # Readability improvements
+        if ats_analysis.component_scores['readability'] < 70:
+            improvement_potential += 8
+        
+        # Cap the potential improvement
         estimated_new_score = min(current_score + improvement_potential, 95)
+        
         return estimated_new_score
 
-# Example usage
-if __name__ == "__main__":
-    feedback_gen = SectionWiseFeedbackGenerator()
+# Performance testing
+def test_optimized_feedback_performance():
+    """Test the performance of optimized feedback generator"""
+    
+    feedback_gen = OptimizedFeedbackGenerator()
     
     sample_resume = """
-    John Doe
-    john.doe@email.com | (555) 123-4567
+    Jane Smith
+    jane.smith@email.com | (555) 987-6543 | linkedin.com/in/janesmith
     
     SUMMARY
-    Experienced software engineer with 5+ years in full-stack development.
+    Data Scientist with 4+ years of experience in machine learning and statistical analysis.
+    Expertise in Python, SQL, and data visualization. Proven track record of delivering
+    actionable insights that drive business decisions.
     
     EXPERIENCE
-    Senior Software Engineer | Tech Corp | 2020-2023
-    • Developed web applications using Python and React
-    • Led team of 3 developers
+    Senior Data Scientist | DataCorp Inc | 2021-2024
+    • Developed machine learning models that improved customer retention by 25%
+    • Led cross-functional team of 5 analysts on predictive analytics projects
+    • Built automated reporting systems reducing manual work by 60%
+    • Implemented A/B testing framework for product optimization
+    
+    Data Scientist | Analytics Solutions | 2020-2021
+    • Created statistical models for sales forecasting with 95% accuracy
+    • Analyzed customer behavior data to identify growth opportunities
+    • Collaborated with product team to optimize user experience
     
     EDUCATION
-    Bachelor of Computer Science | University of Tech | 2018
+    Master of Science in Data Science | Stanford University | 2020
+    Bachelor of Science in Statistics | UC Berkeley | 2018
     
     SKILLS
-    Python, JavaScript, React, SQL, AWS
+    Programming: Python, R, SQL, Java
+    Libraries: Pandas, NumPy, Scikit-learn, TensorFlow, PyTorch
+    Tools: Jupyter, Git, Docker, AWS, Tableau, Power BI
+    Databases: PostgreSQL, MongoDB, Redis
+    
+    PROJECTS
+    Customer Segmentation Analysis | 2023
+    • Implemented K-means clustering to identify customer segments
+    • Increased marketing campaign effectiveness by 35%
+    • Technologies: Python, Scikit-learn, Matplotlib
+    
+    Stock Price Prediction Model | 2023  
+    • Built LSTM neural network for stock price forecasting
+    • Achieved 12% improvement over baseline models
+    • Technologies: Python, TensorFlow, Yahoo Finance API
+    
+    CERTIFICATIONS
+    • AWS Certified Machine Learning - Specialty
+    • Google Analytics Individual Qualification
+    • Coursera Machine Learning Certificate
     """
     
-    # Generate comprehensive feedback
-    feedback = feedback_gen.generate_comprehensive_feedback(sample_resume, "software_engineer")
+    print("🔄 Testing OptimizedFeedbackGenerator performance...")
     
-    print(f"Overall Score: {feedback.overall_feedback.overall_score}")
-    print(f"Estimated Improvement: {feedback.estimated_improvement}")
-    print(f"Priority Improvements: {feedback.priority_improvements}")
+    # Test comprehensive feedback generation
+    start_time = time.time()
+    feedback = feedback_gen.generate_comprehensive_feedback(
+        sample_resume, "data_scientist", "Looking for senior data scientist with Python and ML experience"
+    )
     
-    for section in feedback.section_analyses:
-        print(f"\n{section.section_name.title()} Section:")
-        print(f"Score: {section.score}/100")
-        print(f"Feedback: {section.feedback}")
-        print(f"Suggestions: {section.suggestions[:2]}")
+    total_time = time.time() - start_time
+    
+    print(f"⏱️ Total feedback generation time: {total_time:.3f}s")
+    print(f"📊 Overall ATS Score: {feedback.ats_analysis.total_score:.1f}/100")
+    print(f"📈 Estimated improvement potential: {feedback.estimated_improvement:.1f}/100")
+    print(f"🎯 Priority improvements: {len(feedback.priority_improvements)}")
+    print(f"📋 Section analyses generated: {len(feedback.section_analyses)}")
+    
+    # Performance breakdown
+    print(f"\n📈 Performance Metrics:")
+    print(f"• Processing time: {feedback.processing_time:.3f}s")
+    print(f"• Sections analyzed: {[sa.section_name for sa in feedback.section_analyses]}")
+    print(f"• Missing keywords found: {len(feedback.ats_analysis.missing_keywords)}")
+    print(f"• Component scores calculated: {len(feedback.ats_analysis.component_scores)}")
+    
+    # Test caching performance (second run should be faster)
+    print(f"\n🔄 Testing cache performance...")
+    start_time = time.time()
+    feedback2 = feedback_gen.generate_comprehensive_feedback(
+        sample_resume, "data_scientist", "Looking for senior data scientist with Python and ML experience"
+    )
+    cached_time = time.time() - start_time
+    print(f"⏱️ Cached run time: {cached_time:.3f}s (should be faster)")
+    
+    # Display sample results
+    print(f"\n📋 Sample Results:")
+    print(f"Overall Score: {feedback.overall_feedback.overall_score:.1f}/100")
+    print(f"Top Strengths: {feedback.overall_feedback.strengths[:2]}")
+    print(f"Top Recommendations: {feedback.overall_feedback.recommendations[:2]}")
+    print(f"Priority Improvements: {feedback.priority_improvements[:2]}")
+
+if __name__ == "__main__":
+    test_optimized_feedback_performance()
