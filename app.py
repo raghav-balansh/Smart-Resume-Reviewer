@@ -288,7 +288,7 @@ def main():
             
             # Priority Improvements
             if feedback.priority_improvements:
-                st.subheader("🎯 Priority Improvements")
+                st.subheader("Priority Improvements")
                 for i, improvement in enumerate(feedback.priority_improvements[:3], 1):
                     st.info(f"{i}. {improvement}")
     
@@ -299,24 +299,24 @@ def main():
         
         feedback = st.session_state.comprehensive_feedback
         
-        tab1, tab2, tab3, tab4 = st.tabs(["📝 Overall Feedback", "📋 Section Analysis", "✨ Optimized Resume", "⬇️ Download"])
+        tab1, tab2, tab3, tab4 = st.tabs(["Overall Feedback", "Section Analysis", "Optimized Resume", "Download"])
         
         with tab1:
-            st.subheader("🤖 AI Overall Assessment")
+            st.subheader("AI Overall Assessment")
             
             # Overall feedback from HF model
             if feedback.overall_feedback.strengths:
-                st.subheader("✅ Strengths")
+                st.subheader("Strengths")
                 for strength in feedback.overall_feedback.strengths:
                     st.success(f"• {strength}")
             
             if feedback.overall_feedback.weaknesses:
-                st.subheader("⚠️ Areas for Improvement")
+                st.subheader("Areas for Improvement")
                 for weakness in feedback.overall_feedback.weaknesses:
                     st.warning(f"• {weakness}")
             
             if feedback.overall_feedback.recommendations:
-                st.subheader("💡 Recommendations")
+                st.subheader("Recommendations")
                 for rec in feedback.overall_feedback.recommendations:
                     st.info(f"• {rec}")
         
@@ -346,10 +346,10 @@ def main():
                 # Show improvement
                 if feedback.estimated_improvement > feedback.ats_analysis.total_score:
                     improvement = feedback.estimated_improvement - feedback.ats_analysis.total_score
-                    st.success(f"📈 Estimated score improvement: {feedback.ats_analysis.total_score:.0f}% → {feedback.estimated_improvement:.0f}% (+{improvement:.1f} points)")
+                    st.success(f"Estimated score improvement: {feedback.ats_analysis.total_score:.0f}% → {feedback.estimated_improvement:.0f}% (+{improvement:.1f} points)")
         
         with tab4:
-            st.subheader("📄 Download Professional Resume")
+            st.subheader("Download Professional Resume")
             
             if st.session_state.optimized_resume:
                 try:
@@ -367,7 +367,7 @@ def main():
                     
                     with col1:
                         st.download_button(
-                            label="📄 Download Enhanced PDF",
+                            label="Download Enhanced PDF",
                             data=pdf_data,
                             file_name=f"enhanced_resume_{job_role.lower().replace(' ', '_')}.pdf",
                             mime="application/pdf"
@@ -375,7 +375,7 @@ def main():
                     
                     with col2:
                         st.download_button(
-                            label="📝 Download as TXT",
+                            label="Download as TXT",
                             data=st.session_state.optimized_resume,
                             file_name=f"optimized_resume_{job_role.lower().replace(' ', '_')}.txt",
                             mime="text/plain"
@@ -385,13 +385,13 @@ def main():
                     if os.path.exists(temp_pdf_path):
                         os.remove(temp_pdf_path)
                     
-                    st.info("💡 Tip: The enhanced PDF uses professional formatting and is ATS-optimized!")
+                    st.info("Tip: The enhanced PDF uses professional formatting and is ATS-optimized!")
                     
                 except Exception as e:
                     st.error(f"Error generating PDF: {str(e)}")
                     # Fallback to text download
                     st.download_button(
-                        label="📝 Download as TXT",
+                        label="Download as TXT",
                         data=st.session_state.optimized_resume,
                         file_name=f"optimized_resume_{job_role.lower().replace(' ', '_')}.txt",
                         mime="text/plain"
@@ -401,9 +401,7 @@ def main():
     st.divider()
     st.markdown("""
     <div style='text-align: center; color: #666; padding: 2rem;'>
-        <p>🔒 Your data is processed securely and not stored</p>
-        <p>Built with ❤️ using Streamlit and Hugging Face Transformers</p>
-        <p>Powered by Meta Llama 3.2 - Advanced AI Resume Analysis</p>
+        <p>Your data is processed securely and not stored</p>
     </div>
     """, unsafe_allow_html=True)
 

@@ -117,13 +117,13 @@ You are an expert resume reviewer and ATS specialist. Analyze this resume for a 
 <|start_header_id|>user<|end_header_id|>
 
 Resume Text:
-{resume_text[:1500]}
+{resume_text[:]}
 
 Please provide:
 1. Overall Assessment (2-3 sentences)
-2. Top 3 Strengths
-3. Top 3 Areas for Improvement
-4. Top 3 Recommendations
+2. Top 5 Strengths
+3. Top 5 Areas for Improvement
+4. Top 5 Recommendations
 5. Overall Score (0-100)
 
 Format your response as:
@@ -132,14 +132,20 @@ Format your response as:
 - [strength 1]
 - [strength 2] 
 - [strength 3]
+- [strength 4]
+- [strength 5]
 **Areas for Improvement:**
 - [improvement 1]
 - [improvement 2]
 - [improvement 3]
+- [improvement 4]
+- [improvement 5]
 **Recommendations:**
 - [recommendation 1]
 - [recommendation 2]
 - [recommendation 3]
+- [recommendation 4]
+- [recommendation 5]
 **Overall Score:** [score]/100
 
 <|start_header_id|>assistant<|end_header_id|>"""
@@ -152,10 +158,10 @@ You are an expert resume reviewer. Analyze the {section} section of this resume 
 <|start_header_id|>user<|end_header_id|>
 
 Resume Text:
-{resume_text[:1000]}
+{resume_text[:]}
 
 Focus on the {section} section and provide:
-1. Section Assessment (1-2 sentences)
+1. Section Assessment (1-5 sentences)
 2. Score (0-100)
 3. Specific suggestions for improvement
 4. Missing keywords for this role
@@ -167,7 +173,8 @@ Format your response as:
 - [suggestion 1]
 - [suggestion 2]
 - [suggestion 3]
-**Missing Keywords:** [keyword1, keyword2, keyword3]
+- [suggestion 4]
+**Missing Keywords:** [keyword1, keyword2, keyword3, keyword4, keyword5]
 
 <|start_header_id|>assistant<|end_header_id|>"""
 
@@ -195,7 +202,7 @@ Return ONLY the optimized resume text, properly formatted with clear sections.
         return prompt
     
     def _parse_response(self, response: str, analysis_type: str) -> Dict:
-        """Parse the model response into structured data"""
+        
         try:
             if analysis_type == "overall":
                 return self._parse_overall_response(response)
@@ -208,7 +215,7 @@ Return ONLY the optimized resume text, properly formatted with clear sections.
             return {"error": str(e)}
     
     def _parse_overall_response(self, response: str) -> Dict:
-        """Parse overall analysis response"""
+        #Parse overall analysis response
         result = {
             "assessment": "",
             "strengths": [],

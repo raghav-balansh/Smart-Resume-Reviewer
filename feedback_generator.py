@@ -1,8 +1,3 @@
-"""
-Section-wise Feedback Generator Module
-Provides detailed feedback for each resume section using Hugging Face model
-"""
-
 from typing import Dict, List, Optional, Tuple
 from dataclasses import dataclass
 import re
@@ -28,7 +23,7 @@ class ComprehensiveFeedback:
     estimated_improvement: float
 
 class SectionWiseFeedbackGenerator:
-    """Generate detailed section-wise feedback for resumes"""
+    #Generate detailed section-wise feedback for resumes
     
     def __init__(self, hf_analyzer: HuggingFaceAnalyzer = None):
         self.hf_analyzer = hf_analyzer or HuggingFaceAnalyzer()
@@ -38,7 +33,7 @@ class SectionWiseFeedbackGenerator:
         self.section_guidelines = {
             'summary': {
                 'keywords': ['experienced', 'skilled', 'passionate', 'results-driven', 'innovative'],
-                'length_range': (2, 4),  # sentences
+                'length_range': (2, 6), 
                 'focus_areas': ['value proposition', 'key skills', 'career highlights']
             },
             'experience': {
