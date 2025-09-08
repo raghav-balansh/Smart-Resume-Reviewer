@@ -1074,16 +1074,17 @@ def main():
         demo = create_interface()
         # Launch with optimized settings
         demo.launch(
-            server_name="127.0.0.1",
-            server_port=7860,
-            share=False,
-            show_error=False,
-            debug=False,
-            inbrowser=True,
-            quiet=True
+            # server_name="127.0.0.1",
+            # server_port=7860,
+            # share=False,
+            # show_error=False,
+            # debug=False,
+            # inbrowser=True,
+            # quiet=True
         )
 
     except Exception as e:
         print(f"Error launching application: {e}")
 if __name__ == "__main__":
+
     main()
